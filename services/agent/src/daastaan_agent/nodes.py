@@ -76,7 +76,7 @@ def mood_classification(session: Session, state: StoryState, gw: ModelGateway) -
     hint = f"\n\nThe listener asked for this genre: {state.genre_hint}" if state.genre_hint else ""
     state.mood = gw.structured(
         schema=MoodClassificationOutput,
-        system=prompts.MOOD,
+        system=prompts.mood_prompt(state.language),
         user_content=f"<story>\n{state.raw_text}\n</story>{hint}{_delta(state)}",
         kind="light",
         temperature=0.2,
@@ -90,7 +90,7 @@ def mood_classification(session: Session, state: StoryState, gw: ModelGateway) -
 def story_understanding(session: Session, state: StoryState, gw: ModelGateway) -> StoryState:
     result = gw.structured(
         schema=StoryUnderstandingOutput,
-        system=prompts.STORY_UNDERSTANDING,
+        system=prompts.story_understanding_prompt(state.language),
         user_content=(
             f"Genre and mood: {_mood_summary(state)}\n"
             f"Produce at most {limits.MAX_SCENES} scenes.\n\n"
@@ -123,7 +123,7 @@ def character_registry(session: Session, state: StoryState, gw: ModelGateway) ->
     scene_digest = "\n".join(f"- {s.title}: {s.summary}" for s in state.scenes)
     result = gw.structured(
         schema=CharacterRegistryOutput,
-        system=prompts.CHARACTER_REGISTRY,
+        system=prompts.character_registry_prompt(state.language),
         user_content=(
             f"Genre and mood: {_mood_summary(state)}\n"
             f"Scenes:\n{scene_digest}\n"
@@ -169,7 +169,7 @@ def dialogue_attribution(session: Session, state: StoryState, gw: ModelGateway) 
 
     result = gw.structured(
         schema=DialogueScriptOutput,
-        system=prompts.DIALOGUE_ATTRIBUTION,
+        system=prompts.dialogue_attribution_prompt(state.language),
         user_content=(
             f"Characters:\n{roster}\n\nScenes by index:\n{scene_digest}\n"
             f"Produce at most {limits.MAX_LINES} lines.\n\n"
@@ -244,7 +244,7 @@ def emotion_tagging(session: Session, state: StoryState, gw: ModelGateway) -> St
     )
     result = gw.structured(
         schema=EmotionTaggingOutput,
-        system=prompts.EMOTION_TAGGING,
+        system=prompts.emotion_tagging_prompt(state.language),
         user_content=(
             f"Genre and mood: {_mood_summary(state)}\n\n<lines>\n{payload}\n</lines>{_delta(state)}"
         ),
@@ -272,7 +272,7 @@ def emotion_tagging(session: Session, state: StoryState, gw: ModelGateway) -> St
 def narrator_persona(session: Session, state: StoryState, gw: ModelGateway) -> StoryState:
     result = gw.structured(
         schema=NarratorPersonaOutput,
-        system=prompts.NARRATOR_PERSONA,
+        system=prompts.narrator_persona_prompt(state.language),
         user_content=(
             f"Genre and mood: {_mood_summary(state)}\n"
             f"Arc: {state.arc_summary or 'unknown'}\n"

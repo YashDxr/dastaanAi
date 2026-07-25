@@ -29,6 +29,7 @@ from daastaan_contracts import (
     StoryState,
     StoryStatus,
     TaskName,
+    language_name,
     limits,
     plan_stages,
 )
@@ -191,10 +192,16 @@ def tts_line(self, version_id: str, line_id: str, user_id: str) -> str | None:  
 
         character = state.character_by_id(line.character_id) if line.character_id else None
         voice = (character.voice_preset if character else None) or "alloy"
+        lang_hint = (
+            f"Speak in {language_name(state.language)}."
+            if state.language != "en"
+            else None
+        )
         instructions = " ".join(
             filter(
                 None,
                 [
+                    lang_hint,
                     character.base_instructions if character else None,
                     line.tts_instructions,
                     f"Emotional intensity {line.intensity} out of 5." if line.intensity else None,

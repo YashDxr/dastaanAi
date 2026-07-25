@@ -32,6 +32,7 @@ class StoryState(BaseModel):
     user_id: str
 
     raw_text: str
+    language: str = "en"
     genre_hint: str | None = None
 
     mood: MoodClassificationOutput | None = None

@@ -186,6 +186,46 @@ class TestOutputFormatFlow:
         assert restored.output_format == "audio"
 
 
+class TestLanguageFlow:
+    def test_language_flows_through_state(
+        self, in_memory_session, mock_gateway
+    ):
+        """language should survive a LangGraph round-trip."""
+        from tests.conftest import _base_state
+
+        state = _base_state(language="hi")
+        assert state.language == "hi"
+
+        with (
+            patch(
+                "daastaan_agent.graph.ModelGateway",
+                return_value=mock_gateway,
+            ),
+            patch("daastaan_agent.graph.repo") as mock_repo,
+        ):
+            mock_repo.start_job.return_value = _mock_job(state.story_id)
+            mock_repo.finish_job.return_value = None
+            mock_repo.save_state.return_value = None
+
+            result = run_agent_stages(
+                in_memory_session, state, "test-user"
+            )
+
+        assert result.language == "hi"
+
+    def test_language_defaults_to_en(self):
+        """Without explicit language, state defaults to 'en'."""
+        state = StoryState(
+            story_id="s1", version_id="v1", user_id="u1",
+            raw_text="x" * 30,
+        )
+        assert state.language == "en"
+
+        dumped = state.model_dump(mode="json")
+        restored = StoryState.model_validate(dumped)
+        assert restored.language == "en"
+
+
 class TestGraphErrorHandling:
     def test_node_failure_propagates(
         self, in_memory_session, sample_state, mock_gateway

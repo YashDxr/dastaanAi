@@ -43,6 +43,7 @@ class GraphState(TypedDict, total=False):
     version_id: str
     user_id: str
     raw_text: str
+    language: str
     genre_hint: str | None
     mood: Any
     title: str | None
