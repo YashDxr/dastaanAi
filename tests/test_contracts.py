@@ -13,6 +13,7 @@ from daastaan_contracts import (
     StageName,
     StoryState,
     language_name,
+    limits,
     plan_stages,
 )
 
@@ -44,6 +45,12 @@ class TestStagePlanning:
             (Scope.SCENE, StageName.IMAGE_GENERATION),
         ]:
             assert StageName.ASSEMBLY in plan_stages(scope, stage)
+
+    def test_music_scope_only_regenerates_music_and_mix(self):
+        assert plan_stages(Scope.MUSIC, StageName.MUSIC_GENERATION) == (
+            StageName.MUSIC_GENERATION,
+            StageName.ASSEMBLY,
+        )
 
     def test_invalid_entry_point_rejected(self):
         """A line-scoped request cannot re-enter at an arbitrary stage, which is
@@ -82,6 +89,9 @@ class TestObjectKeys:
         final = ids.dedupe_key(AssetKind.FINAL_EPISODE)
         assert len({audio, image, final}) == 3
 
+    def test_music_bed_is_a_single_idempotent_asset(self):
+        assert ids.dedupe_key(AssetKind.MUSIC_BED) == "music_bed:single"
+
 
 class TestStoryState:
     def test_round_trips_through_json(self):
@@ -108,3 +118,12 @@ class TestLanguageName:
     def test_unknown_code_returns_code(self):
         assert language_name("xx") == "xx"
         assert language_name("tok") == "tok"
+
+
+class TestLimitsAgreeWithEachOther:
+    """Caps that describe the same artifact have to move together. When they drift
+    the UI shows the gap as breakage: an image cap below the scene cap left the
+    last scenes captioned "No artwork"."""
+
+    def test_every_scene_can_be_illustrated(self):
+        assert limits.MAX_IMAGES_PER_STORY >= limits.MAX_SCENES

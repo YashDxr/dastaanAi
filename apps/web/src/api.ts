@@ -1,7 +1,9 @@
 import { ApiError, apiFetch, openProgressStream } from '@daastaan/api-types'
 import type {
   DispatchAccepted,
+  ExportFormat,
   FeedbackEntry,
+  Ingest,
   Progress,
   Story,
   StoryDetail,
@@ -36,10 +38,10 @@ export const auth = {
 export const stories = {
   list: () => apiFetch<Story[]>('/stories'),
   get: (id: string) => apiFetch<StoryDetail>(`/stories/${id}`),
-  create: (raw_text: string, genre_hint?: string) =>
+  create: (raw_text: string, genre_hint?: string, output_format?: string) =>
     apiFetch<DispatchAccepted>('/stories', {
       method: 'POST',
-      body: JSON.stringify({ raw_text, genre_hint: genre_hint || null }),
+      body: JSON.stringify({ raw_text, genre_hint: genre_hint || null, output_format: output_format || 'audio' }),
     }),
   progress: (id: string) => apiFetch<Progress>(`/stories/${id}/jobs`),
   feedback: (id: string, raw_text: string) =>
@@ -48,6 +50,18 @@ export const stories = {
       body: JSON.stringify({ raw_text }),
     }),
   feedbackHistory: (id: string) => apiFetch<FeedbackEntry[]>(`/stories/${id}/feedback`),
+  exports: (id: string) => apiFetch<ExportFormat[]>(`/stories/${id}/exports`),
+  requestExport: (id: string, format: string) =>
+    apiFetch<{ format: string; ready: boolean; url: string | null; size_bytes: number | null }>(
+      `/stories/${id}/exports`,
+      { method: 'POST', body: JSON.stringify({ format }) },
+    ),
+  bgmExports: (id: string) => apiFetch<ExportFormat[]>(`/stories/${id}/bgm/exports`),
+  requestBgmExport: (id: string, format: string) =>
+    apiFetch<{ format: string; ready: boolean; url: string | null; size_bytes: number | null }>(
+      `/stories/${id}/bgm/exports`,
+      { method: 'POST', body: JSON.stringify({ format }) },
+    ),
   regenerate: (
     id: string,
     body: {
@@ -70,6 +84,15 @@ export const mysteries = {
   interrogate: (id: string, suspect_id: string, question: string) => apiFetch<{ case: any }>(`/mysteries/${id}/interrogate`, { method: 'POST', body: JSON.stringify({ suspect_id, question }) }),
   accuse: (id: string, suspect_id: string) => apiFetch<{ status: string; message: string; case: any }>(`/mysteries/${id}/accuse`, { method: 'POST', body: JSON.stringify({ suspect_id }) }),
   reveal: (id: string) => apiFetch<{ case: any }>(`/mysteries/${id}/reveal`, { method: 'POST' }),
+}
+
+export const ingest = {
+  upload: (file: File) => {
+    const body = new FormData()
+    body.append('file', file)
+    return apiFetch<{ ingest_id: string; filename: string }>('/ingest', { method: 'POST', body })
+  },
+  get: (id: string) => apiFetch<Ingest>(`/ingest/${id}`),
 }
 
 /** How often to re-read `/jobs` when the event stream is unavailable. Slower

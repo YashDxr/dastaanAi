@@ -4,6 +4,7 @@ Each node is ``(session, state, gateway) -> StoryState`` - pure function
 signature with no database or network dependencies when the gateway is mocked.
 """
 
+from daastaan_agent import casting
 from daastaan_agent.nodes import (
     character_registry,
     dialogue_attribution,
@@ -15,6 +16,7 @@ from daastaan_agent.nodes import (
 from daastaan_contracts import (
     CharacterRole,
     LineType,
+    VoiceGender,
 )
 
 
@@ -149,33 +151,50 @@ class TestVoiceAssignment:
             assert assignment.voice_preset
             assert assignment.base_instructions
 
-    def test_narrator_gets_sage_voice(
+    def test_every_character_gets_a_different_voice(
         self, stub_session, state_after_dialogue, mock_gateway
     ):
+        """The point of the casting stage. Voices used to be picked by narrative
+        role, so a cast routinely shared timbres and differed only in delivery."""
         state = narrator_persona(stub_session, state_after_dialogue, mock_gateway)
         result = voice_assignment(stub_session, state, mock_gateway)
-        narrator_id = next(
-            c.id for c in result.characters
-            if c.role is CharacterRole.NARRATOR
-        )
-        narrator_assignment = next(
-            a for a in result.voice_map if a.character_id == narrator_id
-        )
-        assert narrator_assignment.voice_preset == "sage"
 
-    def test_protagonist_gets_nova_voice(
+        voices = [a.voice_preset for a in result.voice_map]
+        assert len(set(voices)) == len(result.characters)
+
+    def test_voices_match_the_character_s_vocal_gender(
         self, stub_session, state_after_dialogue, mock_gateway
     ):
         state = narrator_persona(stub_session, state_after_dialogue, mock_gateway)
         result = voice_assignment(stub_session, state, mock_gateway)
-        protag_id = next(
-            c.id for c in result.characters
-            if c.role is CharacterRole.PROTAGONIST
-        )
-        protag_assignment = next(
-            a for a in result.voice_map if a.character_id == protag_id
-        )
-        assert protag_assignment.voice_preset == "nova"
+
+        for character in result.characters:
+            voice = casting.VOICES_BY_ID[character.voice_preset]
+            assert VoiceGender.NEUTRAL in (character.gender, voice.gender) or (
+                character.gender == voice.gender
+            )
+
+    def test_the_state_and_the_voice_map_agree(
+        self, stub_session, state_after_dialogue, mock_gateway
+    ):
+        """`tts_line` reads `character.voice_preset`, not `voice_map`, so the two
+        drifting apart would silently synthesise the wrong voice."""
+        state = narrator_persona(stub_session, state_after_dialogue, mock_gateway)
+        result = voice_assignment(stub_session, state, mock_gateway)
+
+        by_id = {a.character_id: a for a in result.voice_map}
+        for character in result.characters:
+            assert by_id[character.id].voice_preset == character.voice_preset
+            assert by_id[character.id].base_instructions == character.base_instructions
+
+    def test_the_narrator_speaks_with_the_persona_template(
+        self, stub_session, state_after_dialogue, mock_gateway
+    ):
+        state = narrator_persona(stub_session, state_after_dialogue, mock_gateway)
+        result = voice_assignment(stub_session, state, mock_gateway)
+
+        narrator = next(c for c in result.characters if c.role is CharacterRole.NARRATOR)
+        assert narrator.base_instructions == state.narrator_persona.delivery_template
 
     def test_no_model_call(
         self, stub_session, state_after_dialogue, mock_gateway

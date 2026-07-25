@@ -6,7 +6,9 @@ Postgres and a local directory with no Databricks account involved.
 """
 
 from functools import lru_cache
+from ipaddress import ip_address
 from typing import Literal
+from urllib.parse import urlparse, urlsplit, urlunsplit
 
 from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -14,6 +16,21 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 # Not a secret: a deliberately recognisable placeholder that the validator below
 # refuses to accept outside local development.
 DEV_JWT_SECRET = "dev-only-insecure-secret-change-me-before-deploying"  # noqa: S105
+
+
+def _http_music_host_allowed(host: str) -> bool:
+    """HTTP is loopback, Docker Desktop's host gateway, or a private LAN IP.
+
+    A teammate's Apple-Silicon music sidecar is often on the same Wi‑Fi rather
+    than Tailscale. Public hostnames stay rejected so a mis-set URL cannot point
+    credentials at the open internet.
+    """
+    if host in {"127.0.0.1", "localhost", "host.docker.internal"}:
+        return True
+    try:
+        return ip_address(host).is_private
+    except ValueError:
+        return False
 
 
 class Settings(BaseSettings):
@@ -61,6 +78,10 @@ class Settings(BaseSettings):
     # Turn it off to force fresh generations while tuning prompts.
     cache_enabled: bool = True
     cache_ttl_seconds: int = 60 * 60 * 24 * 14
+    # A separate logical database from the broker. Celery keeps hundreds of
+    # `celery-task-meta-*` keys in db 0, which buried the cache entries and made
+    # the Redis UI look empty even when the cache was working.
+    cache_db: int = 1
 
     # --- OpenAI -----------------------------------------------------------
     openai_api_key: str | None = None
@@ -69,6 +90,21 @@ class Settings(BaseSettings):
     model_tts: str = "gpt-4o-mini-tts"
     model_image: str = "gpt-image-1"
     model_moderation: str = "omni-moderation-latest"
+
+    # --- local music sidecar ---------------------------------------------
+    # The MLX model runs natively on an Apple-Silicon Mac. Docker workers only
+    # call its private HTTP API; they never load model weights themselves.
+    music_enabled: bool = False
+    # Only the dedicated music worker needs the bearer/HMAC pair. Keeping this
+    # separate from MUSIC_ENABLED means API, agent, TTS, image, and assembly
+    # containers can orchestrate the optional stage without receiving credentials.
+    music_client_enabled: bool = False
+    music_service_base_url: str = "http://host.docker.internal:8787"
+    music_service_token: str | None = None
+    music_service_hmac_secret: str | None = None
+    music_service_timeout_seconds: int = Field(default=600, ge=10, le=900)
+    music_service_poll_interval_seconds: float = Field(default=2.0, ge=0.2, le=30.0)
+    music_duration_seconds: int = Field(default=30, ge=5, le=60)
 
     # --- Databricks (optional everywhere) ---------------------------------
     databricks_host: str | None = None
@@ -105,6 +141,41 @@ class Settings(BaseSettings):
         Anyone with the repo could mint an admin session if this default reached
         a deployed environment, so it is a hard error, not a warning.
         """
+        # Unlike the application cookie, the music sidecar can be reachable by
+        # Docker containers or a Tailnet even during local development.  Only
+        # the music worker is permitted to possess its credentials.
+        music_problems: list[str] = []
+        if self.music_enabled and self.music_client_enabled:
+            if not self.music_service_token:
+                music_problems.append(
+                    "MUSIC_SERVICE_TOKEN is required when MUSIC_ENABLED=true and "
+                    "MUSIC_CLIENT_ENABLED=true"
+                )
+            if not self.music_service_hmac_secret:
+                music_problems.append(
+                    "MUSIC_SERVICE_HMAC_SECRET is required when MUSIC_ENABLED=true and "
+                    "MUSIC_CLIENT_ENABLED=true"
+                )
+            elif len(self.music_service_hmac_secret) < 32:
+                music_problems.append("MUSIC_SERVICE_HMAC_SECRET must be at least 32 characters")
+            if self.music_service_token and len(self.music_service_token) < 32:
+                music_problems.append("MUSIC_SERVICE_TOKEN must be at least 32 characters")
+        parsed_music_url = urlparse(self.music_service_base_url)
+        host = parsed_music_url.hostname or ""
+        if parsed_music_url.scheme not in {"http", "https"} or not host:
+            music_problems.append("MUSIC_SERVICE_BASE_URL must be an absolute HTTP(S) URL")
+        elif parsed_music_url.scheme == "http" and not _http_music_host_allowed(host):
+            music_problems.append(
+                "MUSIC_SERVICE_BASE_URL may use HTTP only for localhost, "
+                "host.docker.internal, or a private LAN IP"
+            )
+        elif parsed_music_url.scheme == "https" and not host.endswith(".ts.net"):
+            music_problems.append(
+                "MUSIC_SERVICE_BASE_URL may use HTTPS only for a private Tailnet .ts.net host"
+            )
+        if music_problems:
+            raise ValueError("unsafe music configuration: " + "; ".join(music_problems))
+
         if self.app_env == "local":
             return self
         problems = []
@@ -116,6 +187,16 @@ class Settings(BaseSettings):
             raise ValueError(f"unsafe configuration for app_env={self.app_env}: " +
                              "; ".join(problems))
         return self
+
+    def cache_redis_url(self) -> str:
+        """`redis_url` pointed at `cache_db`.
+
+        Derived rather than configured separately so that changing REDIS_URL to
+        another host moves the cache with it; a second URL would silently keep
+        writing to the old one.
+        """
+        parsed = urlsplit(self.redis_url)
+        return urlunsplit(parsed._replace(path=f"/{self.cache_db}"))
 
     def sqlalchemy_url(self) -> str:
         """Lakebase is plain Postgres, so only the DSN differs. The password is

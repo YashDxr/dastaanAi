@@ -31,6 +31,49 @@ class UserOut(BaseModel):
     created_at: datetime
 
 
+# --- exports ---------------------------------------------------------------
+
+
+class ExportRequest(BaseModel):
+    format: str = Field(max_length=8)
+
+
+class ExportOut(BaseModel):
+    format: str
+    ready: bool
+    url: str | None
+    size_bytes: int | None
+
+
+class ExportFormatOut(ExportOut):
+    label: str
+    content_type: str
+    detail: str
+    recommended: bool
+
+
+# --- document ingest -------------------------------------------------------
+
+
+class IngestAccepted(BaseModel):
+    ingest_id: str
+    filename: str
+
+
+class IngestOut(BaseModel):
+    id: str
+    filename: str
+    status: str
+    method: str | None
+    page_count: int | None
+    raw_chars: int | None
+    cleaned_text: str | None
+    title_hint: str | None
+    genre_hint: str | None
+    notes: str | None
+    error: str | None
+
+
 # --- stories ---------------------------------------------------------------
 
 

@@ -68,6 +68,39 @@ def dispatch_regeneration(
     return task.id
 
 
+def dispatch_ingest(*, ingest_id: str, user_id: str) -> str:
+    task = celery_app.send_task(
+        TaskName.INGEST_EXTRACT.value,
+        kwargs={"ingest_id": ingest_id, "user_id": user_id},
+        queue=Queue.AGENTS.value,
+        headers=_task_headers(),
+    )
+    log.info("dispatched_ingest", ingest_id=ingest_id, task_id=task.id)
+    return task.id
+
+
+def dispatch_audio_export(*, version_id: str, user_id: str, fmt: str) -> str:
+    task = celery_app.send_task(
+        TaskName.EXPORT_AUDIO.value,
+        kwargs={"version_id": version_id, "user_id": user_id, "fmt": fmt},
+        queue=Queue.ASSEMBLY.value,
+        headers=_task_headers(),
+    )
+    log.info("dispatched_export", version_id=version_id, fmt=fmt, task_id=task.id)
+    return task.id
+
+
+def dispatch_bgm_export(*, version_id: str, user_id: str, fmt: str) -> str:
+    task = celery_app.send_task(
+        TaskName.EXPORT_BGM.value,
+        kwargs={"version_id": version_id, "user_id": user_id, "fmt": fmt},
+        queue=Queue.ASSEMBLY.value,
+        headers=_task_headers(),
+    )
+    log.info("dispatched_bgm_export", version_id=version_id, fmt=fmt, task_id=task.id)
+    return task.id
+
+
 def dispatch_feedback_interpretation(
     *, story_id: str, version_id: str, user_id: str, feedback_id: str
 ) -> str:

@@ -207,6 +207,37 @@ class AuditLog(SQLModel, table=True):
     created_at: datetime = Field(default_factory=_now, index=True)
 
 
+class IngestJob(SQLModel, table=True):
+    """An uploaded document on its way to becoming story text.
+
+    Deliberately not a `Story`: extraction can fail, OCR can return nonsense, and
+    the cleaned text is shown to the user for review before anything is
+    generated. A story row created here would have to be reaped on every one of
+    those paths. The job ends by handing text to the compose form, and story
+    creation stays exactly as it was.
+    """
+
+    __tablename__ = "ingest_jobs"
+
+    id: str = Field(default_factory=_uuid, primary_key=True)
+    user_id: str = Field(foreign_key="users.id", index=True)
+    filename: str
+    content_type: str
+    size_bytes: int
+    object_key: str
+    status: str = Field(default="pending", index=True)
+    method: str | None = None
+    page_count: int | None = None
+    raw_chars: int | None = None
+    cleaned_text: str | None = None
+    title_hint: str | None = None
+    genre_hint: str | None = None
+    notes: str | None = None
+    error: str | None = None
+    created_at: datetime = Field(default_factory=_now, index=True)
+    finished_at: datetime | None = None
+
+
 class RateLimitEvent(SQLModel, table=True):
     """Counted over a rolling window. Lives in the database rather than memory so
     limits survive an API restart and hold across multiple API replicas."""

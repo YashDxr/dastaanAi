@@ -14,6 +14,7 @@ class StageName(StrEnum):
     VOICE_ASSIGNMENT = "voice_assignment"
     TTS_SYNTHESIS = "tts_synthesis"
     IMAGE_GENERATION = "image_generation"
+    MUSIC_GENERATION = "music_generation"
     ASSEMBLY = "assembly"
     VIDEO_COMPOSITION = "video_composition"
 
@@ -24,6 +25,7 @@ class Scope(StrEnum):
     LINE = "line"
     CHARACTER = "character"
     SCENE = "scene"
+    MUSIC = "music"
     FULL_STORY = "full_story"
 
 
@@ -73,9 +75,42 @@ class CharacterRole(StrEnum):
     SUPPORTING = "supporting"
 
 
+class VoiceGender(StrEnum):
+    """How a character should read, not what they are.
+
+    `NEUTRAL` is a real answer rather than a refusal: narrators, choruses and
+    non-human characters genuinely have no gendered timbre, and forcing them into
+    one is what makes a cast sound like two people.
+    """
+
+    FEMININE = "feminine"
+    MASCULINE = "masculine"
+    NEUTRAL = "neutral"
+
+
+class VoiceAge(StrEnum):
+    CHILD = "child"
+    YOUNG = "young"
+    ADULT = "adult"
+    ELDER = "elder"
+
+
 class AssetKind(StrEnum):
     LINE_AUDIO = "line_audio"
     SCENE_IMAGE = "scene_image"
     MUSIC_BED = "music_bed"
     FINAL_EPISODE = "final_episode"
     FINAL_VIDEO = "final_video"
+    # A transcode of FINAL_EPISODE for download. Kept apart from the episode so
+    # the player always resolves the master and never picks up a variant.
+    EPISODE_EXPORT = "episode_export"
+    # A transcode of MUSIC_BED for download. Same pattern as EPISODE_EXPORT.
+    BGM_EXPORT = "bgm_export"
+
+
+class IngestStatus(StrEnum):
+    PENDING = "pending"
+    EXTRACTING = "extracting"
+    CLEANING = "cleaning"
+    READY = "ready"
+    FAILED = "failed"

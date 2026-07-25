@@ -95,7 +95,11 @@ def build_graph(user_id: str) -> Any:
                 t0 = time.monotonic()
                 try:
                     gateway = ModelGateway(
-                        session, stage=stage.value, version_id=story_state.version_id, user_id=user_id
+                        session,
+                        stage=stage.value,
+                        version_id=story_state.version_id,
+                        user_id=user_id,
+                        story_id=story_state.story_id,
                     )
                     updated = node(session, story_state, gateway)
 

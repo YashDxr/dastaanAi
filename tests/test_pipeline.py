@@ -166,7 +166,7 @@ class TestOutputFormatFlow:
         self, in_memory_session, mock_gateway
     ):
         """output_format should survive a LangGraph round-trip."""
-        from tests.conftest import _base_state
+        from conftest import _base_state
 
         state = _base_state(output_format="video")
         assert state.output_format == "video"
@@ -208,7 +208,7 @@ class TestLanguageFlow:
         self, in_memory_session, mock_gateway
     ):
         """language should survive a LangGraph round-trip."""
-        from tests.conftest import _base_state
+        from conftest import _base_state
 
         state = _base_state(language="hi")
         assert state.language == "hi"
