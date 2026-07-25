@@ -20,7 +20,10 @@ import structlog
 
 log = structlog.get_logger(__name__)
 
-MUSIC_BED_VOLUME = 0.18
+# Music ducking: the bed plays at MUSIC_IDLE_VOLUME during pauses and is
+# compressed down when narration is active.  sidechaincompress listens to
+# the narration track and reduces the bed's gain when speech is detected.
+MUSIC_IDLE_VOLUME = 0.35
 OUTPUT_BITRATE = "128k"
 LOUDNORM = "loudnorm=I=-16:TP=-1.5:LRA=11"
 
@@ -130,9 +133,28 @@ def compose_episode(clips: list[Clip], music_bed: bytes | None = None) -> bytes:
             # -stream_loop repeats the bed so a short track still covers a long
             # episode; duration=first ends the mix when the narration ends.
             inputs += ["-stream_loop", "-1", "-i", str(bed_path)]
-            filters.append(f"[{len(clips)}:a]volume={MUSIC_BED_VOLUME},aresample=44100[bed]")
+            # Raise base level so music is audible in pauses
             filters.append(
-                "[narration][bed]amix=inputs=2:duration=first:dropout_transition=0[mixed]"
+                f"[{len(clips)}:a]volume={MUSIC_IDLE_VOLUME},aresample=44100[bed]"
+            )
+            # Split narration: one copy drives the sidechain, the other is
+            # mixed into the final output.  ffmpeg pads can only be consumed
+            # once, so asplit is required.
+            filters.append("[narration]asplit=2[narr_mix][narr_sc]")
+            # Sidechain compress: narration controls the music's gain.
+            #   level_in=1   – don't boost the sidechain signal
+            #   threshold=0.02 – start compressing at low narration amplitude (catches quiet speech)
+            #   ratio=6      – strong compression (≈ 6:1) so music drops substantially
+            #   attack=80    – 80 ms onset so ducking kicks in quickly when speech starts
+            #   release=600  – 600 ms release so music fades back smoothly after speech
+            #   mix=1        – fully wet (use only compressed output)
+            filters.append(
+                "[bed][narr_sc]sidechaincompress="
+                "level_in=1:threshold=0.02:ratio=6:attack=80:release=600:mix=1"
+                "[ducked]"
+            )
+            filters.append(
+                "[narr_mix][ducked]amix=inputs=2:duration=first:dropout_transition=0[mixed]"
             )
             filters.append(f"[mixed]{LOUDNORM}[out]")
         else:
