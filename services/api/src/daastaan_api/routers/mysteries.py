@@ -33,7 +33,7 @@ def public_case(state: StoryState) -> dict:
             clues.append({"id": clue["id"], "title": "Locked evidence", "discovery_requirement": clue["discovery_requirement"], "locked": True})
     result = {
         "id": case["id"], "title": case["title"], "premise": case["premise"], "setting": case["setting"],
-        "victim": case["victim"], "initial_scene": case["initial_scene"], "difficulty": case["difficulty"],
+        "victim": case["victim"], "initial_scene": case["initial_scene"], "difficulty": case["difficulty"], "tone": case.get("tone", "classic_whodunit"), "duration_minutes": case.get("duration_minutes", 20),
         "suspects": [{k: v for k, v in suspect.items() if k not in {"secret", "motive", "is_culprit"}} for suspect in case["suspects"]],
         "clues": clues, "red_herrings": case["red_herrings"], "revealed": revealed,
         "interrogations": play.get("interrogations", []), "accusations": play.get("accusations", []),
@@ -76,7 +76,8 @@ def get_mystery(story: OwnedStory, session: SessionDep) -> MysteryActionOut:
 def discover(clue_id: str, story: OwnedStory, session: SessionDep, user: CurrentUser) -> MysteryActionOut:
     version = session.get(StoryVersion, story.current_version_id); state = StoryState.model_validate(version.state_json)
     case = _case(state)
-    if clue_id not in {c["id"] for c in case["clues"]}: raise HTTPException(404, "clue not found")
+    clue_ids = [c["id"] for c in case["clues"]]
+    if clue_id not in clue_ids: raise HTTPException(404, "clue not found")
     play = state.mystery_play or {}; ids = set(play.get("discovered_clue_ids", [])); ids.add(clue_id); play["discovered_clue_ids"] = list(ids); state.mystery_play = play
     version.state_json = state.model_dump(mode="json"); audit(session, actor_user_id=user.id, action="mystery.clue_discover", target_type="story", target_id=story.id, metadata={"clue_id": clue_id}); session.commit()
     return MysteryActionOut(status="discovered", message="Evidence added to your case file.", case=public_case(state))

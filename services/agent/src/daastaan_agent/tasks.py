@@ -12,6 +12,7 @@ regeneration still uses the per-stage Celery path because it re-enters the
 pipeline partway through.
 """
 
+import json
 import time
 from uuid import uuid4
 from typing import Any
@@ -73,8 +74,8 @@ RETRY_KWARGS = {
     ),
 }
 
-MYSTERY_SYSTEM = """Create a fair, playable murder mystery. Return only the requested JSON. There must be exactly one culprit whose name exactly matches one suspect. Every suspect needs an alibi and private secret. Give at least three independent fair clues, and make red herrings compatible with the solution. Do not include chain-of-thought."""
-INTERROGATION_SYSTEM = """You are roleplaying a murder-mystery suspect. Return only structured JSON. Never state the killer identity, solution, or any private secret unless the supplied allowed facts explicitly permit it. Answer in character, concise, and plausibly evasive where appropriate."""
+MYSTERY_SYSTEM = """You are Daastaan's fair-play mystery showrunner. Create an original, cinematic and logically solvable case using broad genre conventions (noir moral ambiguity, cozy social observation, thriller pressure, supernatural dread, or classical clue craft), never imitate a named author or existing work. Return only the requested JSON; no chain-of-thought. There must be exactly one culprit whose name exactly matches one suspect. Every suspect needs a public alibi, a believable private secret, motive, and relationship. Provide at least five independent clues, with three that fairly identify the culprit. Red herrings must be compatible with the solution. Difficulty controls ambiguity and clue clarity, not whether the case is solvable. Do not reveal the culprit in title, premise, initial scene, alibis, or clue titles."""
+INTERROGATION_SYSTEM = """You are roleplaying a murder-mystery suspect. Return only structured JSON. Never state the killer identity, solution, or a private secret. Answer in character, concise, emotionally grounded, and plausibly evasive where appropriate. You may only use the supplied public suspect facts and already discovered clues."""
 
 
 def _bypass_cache(state: StoryState) -> bool:
@@ -106,8 +107,9 @@ def generate_mystery(self, story_id: str, version_id: str, user_id: str) -> str:
         try:
             request = (state.mystery or {}).get("request", {})
             gateway = ModelGateway(session, stage="mystery_generation", version_id=version_id, user_id=user_id)
-            result = gateway.structured(schema=MysteryCaseOutput, system=MYSTERY_SYSTEM, user_content=str(request), kind="reasoning")
-            if len(result.suspects) < 3 or result.culprit_name not in {s.name for s in result.suspects} or len(result.clues) < 3:
+            result = gateway.structured(schema=MysteryCaseOutput, system=MYSTERY_SYSTEM, user_content=json.dumps(request), kind="reasoning")
+            expected_suspects = int(request.get("suspect_count", 4))
+            if len(result.suspects) != expected_suspects or result.culprit_name not in {s.name for s in result.suspects} or len(result.clues) < 5:
                 raise ValueError("generated mystery did not pass solvability validation")
             suspects = [{"id": str(uuid4()), **s.model_dump(), "is_culprit": s.name == result.culprit_name} for s in result.suspects]
             culprit = next(s for s in suspects if s["is_culprit"])
@@ -116,7 +118,7 @@ def generate_mystery(self, story_id: str, version_id: str, user_id: str) -> str:
             state.setting = result.setting
             state.mystery = {
                 "id": str(uuid4()), "title": result.title, "premise": result.premise, "setting": result.setting,
-                "victim": result.victim, "difficulty": request.get("difficulty", "medium"), "suspects": suspects,
+                "victim": request.get("victim_name") or result.victim, "difficulty": request.get("difficulty", "medium"), "tone": request.get("tone", "classic_whodunit"), "duration_minutes": request.get("duration_minutes", 20), "suspects": suspects,
                 "culprit_id": culprit["id"], "culprit_motive": result.culprit_motive,
                 "crime_timeline": [x.model_dump() for x in result.crime_timeline], "clues": clues,
                 "red_herrings": result.red_herrings, "solution": result.solution, "reveal_scene": result.reveal_scene,
