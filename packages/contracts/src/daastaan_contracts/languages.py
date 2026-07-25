@@ -39,6 +39,7 @@ SUPPORTED_LANGUAGES: dict[str, str] = {
     "kn": "Kannada",
     "ml": "Malayalam",
     "pa": "Punjabi",
+    "or": "Odia",
     "ur": "Urdu",
     "sw": "Swahili",
     "cs": "Czech",

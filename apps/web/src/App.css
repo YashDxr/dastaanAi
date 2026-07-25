@@ -620,10 +620,31 @@
   font-weight: 500;
 }
 
+.format-selector.wrap {
+  flex-wrap: wrap;
+}
+
 .format-hint {
   margin: 0;
   font-size: 0.82rem;
   color: var(--ink-soft);
+}
+
+/* Language groups ------------------------------------------------------- */
+
+.lang-group {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+}
+
+.lang-group-label {
+  font-size: 0.72rem;
+  color: var(--ink-soft);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+  min-width: 3.2rem;
 }
 
 /* Video player --------------------------------------------------------- */

@@ -72,6 +72,8 @@ from .ingest import ExtractionError
 
 if TYPE_CHECKING:
     from .ingest import Extraction as IngestExtraction
+from openai import BadRequestError, OpenAIError
+
 from .gateway import PERMANENT_FAILURES, ModelGateway, ModerationBlocked
 from .graph import run_agent_stages
 from .music import MusicServiceClient, MusicServiceError, build_music_brief
@@ -330,6 +332,8 @@ def tts_line(self, version_id: str, line_id: str, user_id: str) -> str | None:  
         )
 
         try:
+            from .casting import SARVAM_LANGUAGES
+
             gateway = ModelGateway(
                 session,
                 stage=StageName.TTS_SYNTHESIS.value,
@@ -338,10 +342,19 @@ def tts_line(self, version_id: str, line_id: str, user_id: str) -> str | None:  
                 story_id=state.story_id,
                 bypass_cache=_bypass_cache(state),
             )
+            use_sarvam = (
+                state.language in SARVAM_LANGUAGES
+                and gateway.settings.sarvam_api_key
+            )
             with _TTSSemaphore(state.story_id):
-                audio, duration_ms = gateway.speech(
-                    text=line.text, voice=voice, instructions=instructions
-                )
+                if use_sarvam:
+                    audio, duration_ms = gateway.sarvam_speech(
+                        text=line.text, voice=voice, language=state.language,
+                    )
+                else:
+                    audio, duration_ms = gateway.speech(
+                        text=line.text, voice=voice, instructions=instructions
+                    )
         except Exception:
             repo.release_claim(session, claim)
             raise
@@ -418,6 +431,23 @@ def gen_image(self, version_id: str, scene_id: str, user_id: str, shot_type: str
                 bypass_cache=_bypass_cache(state),
             )
             image = gateway.image(prompt=prompt)
+        except (BadRequestError, OpenAIError) as exc:
+            # Safety rejections (public figures, copyrighted content, etc.)
+            # must not kill the chord. A missing image degrades the video to
+            # fewer frames or audio-only — far better than a dead story.
+            error_body = str(exc)
+            is_moderation = "moderation" in error_body or "safety" in error_body
+            if is_moderation:
+                repo.release_claim(session, claim)
+                log.warning(
+                    "image_moderation_blocked",
+                    scene_id=scene_id,
+                    line_id=line_id,
+                    error=error_body[:300],
+                )
+                return scene_id
+            repo.release_claim(session, claim)
+            raise
         except Exception:
             repo.release_claim(session, claim)
             raise
@@ -725,7 +755,7 @@ def compose_video_task(self, version_id: str, user_id: str) -> str:  # type: ign
             if not scene_frames:
                 raise AssemblyError("no scene frames available for video composition")
 
-            video = compose_video(episode_audio, scene_frames)
+            video = compose_video(episode_audio, scene_frames, language=state.language)
 
             key = ids.object_key(version_id, AssetKind.FINAL_VIDEO, ext="mp4")
             store.put(key, video, "video/mp4")

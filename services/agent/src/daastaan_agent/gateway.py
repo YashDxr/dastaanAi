@@ -436,6 +436,75 @@ class ModelGateway:
         )
         return audio, duration_ms
 
+    def sarvam_speech(self, *, text: str, voice: str, language: str) -> tuple[bytes, int]:
+        """Sarvam bulbul:v3 TTS — returns (mp3_bytes, duration_ms)."""
+        import httpx
+
+        lang_code = language if "-" in language else f"{language}-IN"
+        key = cache.digest("tts", "sarvam:bulbul:v3", voice, text, lang_code)
+
+        if self._cache_reads_enabled():
+            hit = cache.get_tts(key)
+            if hit is not None:
+                audio = cache.read_blob(hit)
+                if audio is not None:
+                    duration_ms = int(hit.meta.get("duration_ms") or 0) or probe_duration_ms(audio)
+                    self._record_cache_hit(model="sarvam:bulbul:v3", unit_count=duration_ms / 1000)
+                    return audio, duration_ms
+
+        payload = {
+            "text": text,
+            "target_language_code": lang_code,
+            "speaker": voice,
+            "model": "bulbul:v3",
+            "sample_rate": 24000,
+            "enable_preprocessing": True,
+        }
+        headers = {
+            "api-subscription-key": self.settings.sarvam_api_key,
+            "Content-Type": "application/json",
+        }
+        resp = httpx.post(
+            "https://api.sarvam.ai/text-to-speech",
+            json=payload, headers=headers, timeout=60,
+        )
+        resp.raise_for_status()
+        audio_b64 = resp.json()["audios"][0]
+        wav_bytes = base64.b64decode(audio_b64)
+        mp3_bytes = self._wav_to_mp3(wav_bytes)
+        duration_ms = probe_duration_ms(mp3_bytes)
+
+        self._record(
+            model="sarvam:bulbul:v3", cost_usd=0.0,
+            unit_count=duration_ms / 1000, is_estimated=True,
+        )
+        cache.put_tts(
+            key, data=mp3_bytes, duration_ms=duration_ms,
+            source=self._source("sarvam:bulbul:v3", text),
+        )
+        return mp3_bytes, duration_ms
+
+    @staticmethod
+    def _wav_to_mp3(wav_bytes: bytes) -> bytes:
+        """Convert WAV to MP3 via ffmpeg subprocess."""
+        import subprocess
+
+        wav_path = write_temp(wav_bytes, suffix=".wav")
+        mp3_path = wav_path.with_suffix(".mp3")
+        try:
+            subprocess.run(  # noqa: S603
+                [
+                    "ffmpeg", "-y", "-i", str(wav_path),
+                    "-codec:a", "libmp3lame", "-q:a", "2",
+                    str(mp3_path),
+                ],
+                capture_output=True, check=True,
+            )
+            return mp3_path.read_bytes()
+        finally:
+            wav_path.unlink(missing_ok=True)
+            mp3_path.unlink(missing_ok=True)
+
     @_RETRY
     def image(self, *, prompt: str, size: str = "1024x1024") -> bytes:
         model = self._resolve_model("image")
