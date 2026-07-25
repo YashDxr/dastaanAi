@@ -1,11 +1,14 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { AppHeader } from '../components/AppHeader'
 import { AudioPlayer } from '../components/AudioPlayer'
+import { CliffhangerPanel } from '../components/CliffhangerPanel'
 import { VideoPlayer, VideoPlayerEmpty } from '../components/VideoPlayer'
 import { FeedbackComposer } from '../components/FeedbackComposer'
 import { ProgressStepper } from '../components/ProgressStepper'
 import { ScenePanel } from '../components/ScenePanel'
 import { ScriptPanel } from '../components/ScriptPanel'
+import { StoryGenomePanel } from '../components/StoryGenomePanel'
+import { WritersRoomPanel } from '../components/WritersRoomPanel'
 import { formatError, stories as storiesApi, watchProgress } from '../api'
 import type { FeedbackEntry, Progress, StoryDetail, User } from '../types'
 
@@ -23,7 +26,7 @@ export function Studio({ user, storyId, onLogout, onHome, onCompose }: Props) {
   const [feedback, setFeedback] = useState<FeedbackEntry[]>([])
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
-  const [tab, setTab] = useState<'episode' | 'scenes'>('episode')
+  const [tab, setTab] = useState<'episode' | 'scenes' | 'writers-room' | 'cliffhanger' | 'genome'>('episode')
   const [seekLineId, setSeekLineId] = useState<string | null>(null)
   // A respeak is only audible once assembly has rebuilt the mix, so the jump to
   // the line waits for that. These hold the request in the meantime: the line to
@@ -181,6 +184,9 @@ export function Studio({ user, storyId, onLogout, onHome, onCompose }: Props) {
                 [
                   ['episode', 'Episode'],
                   ['scenes', 'Scenes'],
+                  ['writers-room', 'Writers Room'],
+                  ['cliffhanger', 'Cliffhanger'],
+                  ['genome', 'Story DNA'],
                 ] as const
               ).map(([id, label]) => (
                 <button
@@ -285,11 +291,45 @@ export function Studio({ user, storyId, onLogout, onHome, onCompose }: Props) {
                 lines={state?.lines ?? []}
                 pending={regenerating || detail.story.status === 'generating'}
                 onPlayScene={(lineId) => {
-                  // Jump the player, then show it: the audio element lives in the
-                  // Episode panel and is only hidden, so the seek still applies.
                   setSeekLineId(lineId)
                   setTab('episode')
                 }}
+              />
+            </div>
+
+            <div
+              id="studio-panel-writers-room"
+              role="tabpanel"
+              aria-labelledby="studio-tab-writers-room"
+              hidden={tab !== 'writers-room'}
+            >
+              <WritersRoomPanel
+                storyId={storyId}
+                ready={detail.story.status === 'ready'}
+              />
+            </div>
+
+            <div
+              id="studio-panel-cliffhanger"
+              role="tabpanel"
+              aria-labelledby="studio-tab-cliffhanger"
+              hidden={tab !== 'cliffhanger'}
+            >
+              <CliffhangerPanel
+                storyId={storyId}
+                ready={detail.story.status === 'ready'}
+              />
+            </div>
+
+            <div
+              id="studio-panel-genome"
+              role="tabpanel"
+              aria-labelledby="studio-tab-genome"
+              hidden={tab !== 'genome'}
+            >
+              <StoryGenomePanel
+                storyId={storyId}
+                ready={detail.story.status === 'ready'}
               />
             </div>
           </>

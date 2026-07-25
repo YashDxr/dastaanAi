@@ -1428,6 +1428,150 @@ def _fail_ingest(ingest_id: str, exc: Exception) -> None:
         log.exception("ingest_failure_not_recorded", ingest_id=ingest_id)
 
 
+# --- post-production analysis ----------------------------------------------
+
+
+@celery_app.task(name=TaskName.WRITERS_ROOM.value, bind=True, **RETRY_KWARGS)
+def run_writers_room_task(self, version_id: str, user_id: str, session_id: str) -> str:  # type: ignore[no-untyped-def]
+    """Run the AI Writers Room analysis on a finished story."""
+    from daastaan_common.models import WritersRoomSession
+
+    from .writers_room import run_writers_room
+
+    init_tracing()
+    with session_scope() as session:
+        row = session.get(WritersRoomSession, session_id)
+        if row is None:
+            raise LookupError(f"writers room session {session_id} not found")
+        row.status = "running"
+        session.commit()
+
+    try:
+        with session_scope() as session:
+            state = repo.load_state(session, version_id)
+            gateway = ModelGateway(
+                session,
+                stage="writers_room",
+                version_id=version_id,
+                user_id=user_id,
+                story_id=state.story_id,
+            )
+            result = run_writers_room(state, gateway)
+
+        with session_scope() as session:
+            row = session.get(WritersRoomSession, session_id)
+            if row:
+                row.status = "succeeded"
+                row.result_json = result.model_dump()
+                row.finished_at = _utcnow()
+                session.commit()
+    except Exception as exc:
+        with session_scope() as session:
+            row = session.get(WritersRoomSession, session_id)
+            if row:
+                row.status = "failed"
+                row.error = str(exc)[:2000]
+                row.finished_at = _utcnow()
+                session.commit()
+        raise
+
+    return session_id
+
+
+@celery_app.task(name=TaskName.CLIFFHANGER.value, bind=True, **RETRY_KWARGS)
+def run_cliffhanger_task(self, version_id: str, user_id: str, session_id: str) -> str:  # type: ignore[no-untyped-def]
+    """Run the Cliffhanger Optimizer analysis on a finished story."""
+    from daastaan_common.models import CliffhangerAnalysis
+
+    from .cliffhanger import analyze_cliffhanger
+
+    init_tracing()
+    with session_scope() as session:
+        row = session.get(CliffhangerAnalysis, session_id)
+        if row is None:
+            raise LookupError(f"cliffhanger analysis {session_id} not found")
+        row.status = "running"
+        session.commit()
+
+    try:
+        with session_scope() as session:
+            state = repo.load_state(session, version_id)
+            gateway = ModelGateway(
+                session,
+                stage="cliffhanger",
+                version_id=version_id,
+                user_id=user_id,
+                story_id=state.story_id,
+            )
+            result = analyze_cliffhanger(state, gateway)
+
+        with session_scope() as session:
+            row = session.get(CliffhangerAnalysis, session_id)
+            if row:
+                row.status = "succeeded"
+                row.result_json = result.model_dump()
+                row.finished_at = _utcnow()
+                session.commit()
+    except Exception as exc:
+        with session_scope() as session:
+            row = session.get(CliffhangerAnalysis, session_id)
+            if row:
+                row.status = "failed"
+                row.error = str(exc)[:2000]
+                row.finished_at = _utcnow()
+                session.commit()
+        raise
+
+    return session_id
+
+
+@celery_app.task(name=TaskName.STORY_GENOME.value, bind=True, **RETRY_KWARGS)
+def run_story_genome_task(self, version_id: str, user_id: str, session_id: str) -> str:  # type: ignore[no-untyped-def]
+    """Run the Story Genome analysis on a finished story."""
+    from daastaan_common.models import StoryGenomeAnalysis
+
+    from .story_genome import analyze_genome
+
+    init_tracing()
+    with session_scope() as session:
+        row = session.get(StoryGenomeAnalysis, session_id)
+        if row is None:
+            raise LookupError(f"story genome analysis {session_id} not found")
+        row.status = "running"
+        session.commit()
+
+    try:
+        with session_scope() as session:
+            state = repo.load_state(session, version_id)
+            gateway = ModelGateway(
+                session,
+                stage="story_genome",
+                version_id=version_id,
+                user_id=user_id,
+                story_id=state.story_id,
+            )
+            result = analyze_genome(state, gateway)
+
+        with session_scope() as session:
+            row = session.get(StoryGenomeAnalysis, session_id)
+            if row:
+                row.status = "succeeded"
+                row.result_json = result.model_dump()
+                row.finished_at = _utcnow()
+                session.commit()
+    except Exception as exc:
+        with session_scope() as session:
+            row = session.get(StoryGenomeAnalysis, session_id)
+            if row:
+                row.status = "failed"
+                row.error = str(exc)[:2000]
+                row.finished_at = _utcnow()
+                session.commit()
+        raise
+
+    return session_id
+
+
 def _resolve_target(state: StoryState, scope: Scope, target_id: str | None) -> str | None:
     """A target the model names must exist in the current state. Unknown ids are
     dropped rather than passed along."""

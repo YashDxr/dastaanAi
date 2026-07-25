@@ -241,3 +241,98 @@ export const STAGE_DESCRIPTIONS: Record<string, string> = {
 }
 
 export const PIPELINE_ORDER = Object.keys(STAGE_LABELS)
+
+// --- Writers Room ---------------------------------------------------------
+
+export type PersonaCritique = {
+  persona: string
+  strengths: string[]
+  concerns: string[]
+  suggestions: string[]
+}
+
+export type RevisionBrief = {
+  summary: string
+  key_themes: string[]
+  priority_actions: string[]
+  overall_score: number
+}
+
+export type WritersRoomResult = {
+  critiques: PersonaCritique[]
+  brief: RevisionBrief
+}
+
+export type WritersRoomSession = {
+  id: string
+  story_id: string
+  version_id: string
+  status: string
+  result: WritersRoomResult | null
+  error: string | null
+  created_at: string
+  finished_at: string | null
+}
+
+// --- Cliffhanger Optimizer ------------------------------------------------
+
+export type EndingSuggestion = {
+  title: string
+  sketch: string
+  tension_score: number
+  binge_probability: number
+}
+
+export type CliffhangerResult = {
+  current_score: number
+  current_analysis: string
+  tension: number
+  unresolved_threads: string[]
+  suggestions: EndingSuggestion[]
+}
+
+export type CliffhangerAnalysis = {
+  id: string
+  story_id: string
+  version_id: string
+  status: string
+  result: CliffhangerResult | null
+  error: string | null
+  created_at: string
+  finished_at: string | null
+}
+
+// --- Story Genome ---------------------------------------------------------
+
+export type GenomeTrait = {
+  trait: string
+  value: number
+  explanation: string
+}
+
+export type StoryConcept = {
+  title: string
+  premise: string
+  why_similar: string
+}
+
+export type StoryGenomeResult = {
+  traits: GenomeTrait[]
+  arc_shape: string
+  pacing_profile: string
+  dialogue_ratio: number
+  character_balance: Record<string, number>
+  concepts: StoryConcept[]
+  summary: string
+}
+
+export type StoryGenomeAnalysis = {
+  id: string
+  story_id: string
+  version_id: string
+  status: string
+  result: StoryGenomeResult | null
+  error: string | null
+  created_at: string
+  finished_at: string | null
+}

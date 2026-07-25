@@ -18,6 +18,7 @@ from fastapi.responses import JSONResponse
 from .routers import (
     admin,
     auth,
+    cliffhanger,
     exports,
     feedback,
     health,
@@ -25,7 +26,9 @@ from .routers import (
     media,
     progress,
     stories,
+    story_genome,
     studio,
+    writers_room,
 )
 
 log = structlog.get_logger(__name__)
@@ -83,6 +86,7 @@ async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONR
 
 for router in (health.router, auth.router, stories.router, feedback.router, media.router,
                admin.router, studio.router, ingest.router, exports.router,
+               writers_room.router, cliffhanger.router, story_genome.router,
                progress.sse_router):
     app.include_router(router, prefix="/api")
 

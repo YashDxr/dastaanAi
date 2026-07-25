@@ -1,5 +1,6 @@
 import { ApiError, apiFetch, openProgressStream } from '@daastaan/api-types'
 import type {
+  CliffhangerAnalysis,
   DispatchAccepted,
   ExportFormat,
   FeedbackEntry,
@@ -7,7 +8,9 @@ import type {
   Progress,
   Story,
   StoryDetail,
+  StoryGenomeAnalysis,
   User,
+  WritersRoomSession,
 } from './types'
 
 export { ApiError }
@@ -75,6 +78,19 @@ export const stories = {
       method: 'POST',
       body: JSON.stringify(body),
     }),
+  // --- Post-production analysis features ---
+  writersRoom: (id: string) =>
+    apiFetch<WritersRoomSession[]>(`/stories/${id}/writers-room`),
+  startWritersRoom: (id: string) =>
+    apiFetch<WritersRoomSession>(`/stories/${id}/writers-room`, { method: 'POST' }),
+  cliffhanger: (id: string) =>
+    apiFetch<CliffhangerAnalysis[]>(`/stories/${id}/cliffhanger`),
+  startCliffhanger: (id: string) =>
+    apiFetch<CliffhangerAnalysis>(`/stories/${id}/cliffhanger`, { method: 'POST' }),
+  genome: (id: string) =>
+    apiFetch<StoryGenomeAnalysis[]>(`/stories/${id}/genome`),
+  startGenome: (id: string) =>
+    apiFetch<StoryGenomeAnalysis>(`/stories/${id}/genome`, { method: 'POST' }),
 }
 
 export const ingest = {

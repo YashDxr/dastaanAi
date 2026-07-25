@@ -238,6 +238,57 @@ class IngestJob(SQLModel, table=True):
     finished_at: datetime | None = None
 
 
+class WritersRoomSession(SQLModel, table=True):
+    """One Writers Room analysis run for a story version."""
+
+    __tablename__ = "writers_room_sessions"
+
+    id: str = Field(default_factory=_uuid, primary_key=True)
+    story_id: str = Field(index=True)
+    version_id: str = Field(index=True)
+    status: str = Field(default="pending", index=True)
+    result_json: dict[str, Any] | None = Field(
+        default=None, sa_column=_json_column(nullable=True)
+    )
+    error: str | None = None
+    created_at: datetime = Field(default_factory=_now)
+    finished_at: datetime | None = None
+
+
+class CliffhangerAnalysis(SQLModel, table=True):
+    """One Cliffhanger Optimizer analysis run for a story version."""
+
+    __tablename__ = "cliffhanger_analyses"
+
+    id: str = Field(default_factory=_uuid, primary_key=True)
+    story_id: str = Field(index=True)
+    version_id: str = Field(index=True)
+    status: str = Field(default="pending", index=True)
+    result_json: dict[str, Any] | None = Field(
+        default=None, sa_column=_json_column(nullable=True)
+    )
+    error: str | None = None
+    created_at: datetime = Field(default_factory=_now)
+    finished_at: datetime | None = None
+
+
+class StoryGenomeAnalysis(SQLModel, table=True):
+    """One Story Genome analysis run for a story version."""
+
+    __tablename__ = "story_genome_analyses"
+
+    id: str = Field(default_factory=_uuid, primary_key=True)
+    story_id: str = Field(index=True)
+    version_id: str = Field(index=True)
+    status: str = Field(default="pending", index=True)
+    result_json: dict[str, Any] | None = Field(
+        default=None, sa_column=_json_column(nullable=True)
+    )
+    error: str | None = None
+    created_at: datetime = Field(default_factory=_now)
+    finished_at: datetime | None = None
+
+
 class RateLimitEvent(SQLModel, table=True):
     """Counted over a rolling window. Lives in the database rather than memory so
     limits survive an API restart and hold across multiple API replicas."""

@@ -1385,6 +1385,385 @@
   display: none !important;
 }
 
+/* Analysis panels (shared) ------------------------------------------------ */
+
+.analysis-panel {
+  background: color-mix(in srgb, #fff 90%, transparent);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: 1.15rem 1.2rem;
+  margin-top: 1.25rem;
+  animation: rise 0.65s var(--ease) both;
+}
+
+.analysis-panel .eyebrow {
+  margin-bottom: 0.75rem;
+}
+
+.analysis-panel .btn {
+  margin-bottom: 1rem;
+}
+
+.analysis-result {
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+}
+
+/* Writers Room ------------------------------------------------------------- */
+
+.wr-brief {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.wr-score-badge {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.15rem;
+  padding: 0.3rem 0.65rem;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--teal) 12%, transparent);
+  align-self: flex-start;
+}
+
+.wr-score-value {
+  font-size: 1.6rem;
+  font-weight: 700;
+  color: var(--teal-deep);
+  font-variant-numeric: tabular-nums;
+}
+
+.wr-score-label {
+  font-size: 0.85rem;
+  color: var(--ink-soft);
+}
+
+.wr-summary {
+  margin: 0;
+  font-size: 0.95rem;
+  line-height: 1.55;
+}
+
+.wr-themes {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+}
+
+.wr-actions ul {
+  margin: 0.4rem 0 0;
+  padding-left: 1.2rem;
+  font-size: 0.92rem;
+  line-height: 1.55;
+}
+
+.wr-actions li {
+  margin-bottom: 0.3rem;
+}
+
+.wr-critiques {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.wr-critique-card {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  overflow: hidden;
+}
+
+.wr-critique-header {
+  width: 100%;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0.65rem 0.85rem;
+  border: none;
+  background: transparent;
+  font: inherit;
+  cursor: pointer;
+}
+
+.wr-critique-header:hover {
+  background: color-mix(in srgb, var(--line) 30%, transparent);
+}
+
+.wr-critique-caret {
+  font-size: 0.65rem;
+  color: var(--ink-soft);
+}
+
+.wr-critique-body {
+  padding: 0 0.85rem 0.85rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+
+.wr-critique-body ul {
+  margin: 0.2rem 0 0;
+  padding-left: 1.1rem;
+  font-size: 0.88rem;
+  line-height: 1.5;
+}
+
+.wr-section-label {
+  margin: 0;
+  font-size: 0.78rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--ink-soft);
+}
+
+.wr-strengths-label {
+  color: var(--ok);
+}
+
+.wr-concerns-label {
+  color: var(--amber);
+}
+
+/* Cliffhanger -------------------------------------------------------------- */
+
+.ch-scores {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.ch-score-item {
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  gap: 0.6rem;
+  align-items: center;
+}
+
+.ch-score-bar {
+  height: 8px;
+  background: color-mix(in srgb, var(--line) 60%, transparent);
+  border-radius: 999px;
+  overflow: hidden;
+}
+
+.ch-score-fill {
+  height: 100%;
+  background: var(--teal);
+  border-radius: 999px;
+  transition: width 0.5s var(--ease);
+}
+
+.ch-score-fill.ch-tension {
+  background: var(--amber);
+}
+
+.ch-score-num {
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  font-size: 0.88rem;
+  min-width: 2.5rem;
+  text-align: right;
+}
+
+.ch-score-label {
+  font-size: 0.82rem;
+  color: var(--ink-soft);
+  min-width: 6rem;
+}
+
+.ch-analysis {
+  margin: 0;
+  font-size: 0.95rem;
+  line-height: 1.55;
+}
+
+.ch-threads ul {
+  margin: 0.4rem 0 0;
+  padding-left: 1.2rem;
+  font-size: 0.92rem;
+  line-height: 1.55;
+}
+
+.ch-suggestion-cards {
+  display: flex;
+  flex-direction: column;
+  gap: 0.65rem;
+  margin-top: 0.5rem;
+}
+
+.ch-suggestion-card {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 0.85rem 1rem;
+  background: #fff;
+}
+
+.ch-suggestion-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.75rem;
+  margin-bottom: 0.4rem;
+}
+
+.ch-binge-badge {
+  font-size: 0.72rem;
+  font-weight: 600;
+  padding: 0.15rem 0.5rem;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--amber) 15%, transparent);
+  color: color-mix(in srgb, var(--amber) 80%, var(--ink));
+  white-space: nowrap;
+}
+
+.ch-suggestion-sketch {
+  margin: 0;
+  font-size: 0.9rem;
+  line-height: 1.5;
+}
+
+.ch-suggestion-meta {
+  margin-top: 0.4rem;
+  font-size: 0.82rem;
+  color: var(--ink-soft);
+}
+
+/* Story Genome ------------------------------------------------------------- */
+
+.genome-summary {
+  margin: 0;
+  font-size: 0.95rem;
+  line-height: 1.55;
+}
+
+.genome-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+}
+
+.genome-traits {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.genome-trait {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+}
+
+.genome-trait-header {
+  display: flex;
+  justify-content: space-between;
+  font-size: 0.88rem;
+}
+
+.genome-trait-name {
+  font-weight: 500;
+  text-transform: capitalize;
+}
+
+.genome-trait-value {
+  font-variant-numeric: tabular-nums;
+  color: var(--ink-soft);
+  font-size: 0.82rem;
+}
+
+.genome-trait-bar {
+  height: 6px;
+  background: color-mix(in srgb, var(--line) 60%, transparent);
+  border-radius: 999px;
+  overflow: hidden;
+}
+
+.genome-trait-fill {
+  height: 100%;
+  background: var(--teal);
+  border-radius: 999px;
+  transition: width 0.5s var(--ease);
+}
+
+.genome-trait-explain {
+  margin: 0;
+  font-size: 0.82rem;
+  color: var(--ink-soft);
+  line-height: 1.45;
+}
+
+.genome-characters {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.genome-char-bar {
+  display: flex;
+  height: 14px;
+  border-radius: 999px;
+  overflow: hidden;
+}
+
+.genome-char-segment {
+  min-width: 2px;
+  transition: width 0.5s var(--ease);
+}
+
+.genome-char-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem 0.85rem;
+  font-size: 0.8rem;
+}
+
+.genome-char-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+}
+
+.genome-char-dot {
+  width: 0.5rem;
+  height: 0.5rem;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.genome-concept-cards {
+  display: flex;
+  flex-direction: column;
+  gap: 0.65rem;
+  margin-top: 0.5rem;
+}
+
+.genome-concept-card {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 0.85rem 1rem;
+  background: #fff;
+}
+
+.genome-concept-card strong {
+  font-family: var(--display);
+  font-size: 1.05rem;
+}
+
+.genome-concept-card p {
+  margin: 0.3rem 0 0;
+  font-size: 0.9rem;
+  line-height: 1.5;
+}
+
+.genome-concept-why {
+  color: var(--ink-soft);
+  font-size: 0.85rem !important;
+  font-style: italic;
+}
+
 .loading-copy {
   padding: 2rem 0;
 }
