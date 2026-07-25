@@ -6,7 +6,7 @@ contract and neither React app hand-writes an interface.
 """
 
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal
 
 from daastaan_contracts import Scope, StageName, limits
 from pydantic import BaseModel, EmailStr, Field
@@ -37,6 +37,8 @@ class UserOut(BaseModel):
 class CreateStoryRequest(BaseModel):
     raw_text: str = Field(min_length=20, max_length=limits.MAX_STORY_INPUT_CHARS)
     genre_hint: str | None = Field(default=None, max_length=60)
+    language: str = Field(default="en", min_length=2, max_length=5, pattern=r"^[a-z]{2,3}(-[A-Z]{2})?$")
+    output_format: Literal["audio", "video", "both"] = "audio"
 
 
 class StoryOut(BaseModel):

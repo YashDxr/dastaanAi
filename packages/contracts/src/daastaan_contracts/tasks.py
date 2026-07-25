@@ -24,6 +24,7 @@ class TaskName(StrEnum):
     ASSEMBLE = "daastaan.assembly.compose"
     INTERPRET_FEEDBACK = "daastaan.feedback.interpret"
     REGENERATE = "daastaan.pipeline.regenerate"
+    COMPOSE_VIDEO = "daastaan.video.compose"
 
 
 STAGE_QUEUE: dict[StageName, Queue] = {
@@ -37,6 +38,7 @@ STAGE_QUEUE: dict[StageName, Queue] = {
     StageName.TTS_SYNTHESIS: Queue.MEDIA,
     StageName.IMAGE_GENERATION: Queue.MEDIA,
     StageName.ASSEMBLY: Queue.ASSEMBLY,
+    StageName.VIDEO_COMPOSITION: Queue.ASSEMBLY,
 }
 
 # Redis pub/sub channel the workers publish progress to and the API's WebSocket

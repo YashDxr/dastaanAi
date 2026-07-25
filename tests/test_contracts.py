@@ -12,6 +12,7 @@ from daastaan_contracts import (
     Scope,
     StageName,
     StoryState,
+    language_name,
     plan_stages,
 )
 
@@ -96,3 +97,14 @@ class TestStoryState:
         assert state.line_by_id("line_9999") is None
         assert state.scene_by_id("scene_99") is None
         assert state.character_by_id("char_99") is None
+
+
+class TestLanguageName:
+    def test_known_code_returns_name(self):
+        assert language_name("en") == "English"
+        assert language_name("hi") == "Hindi"
+        assert language_name("ja") == "Japanese"
+
+    def test_unknown_code_returns_code(self):
+        assert language_name("xx") == "xx"
+        assert language_name("tok") == "tok"

@@ -32,6 +32,7 @@ class StoryState(BaseModel):
     user_id: str
 
     raw_text: str
+    language: str = "en"
     genre_hint: str | None = None
 
     mood: MoodClassificationOutput | None = None
@@ -48,6 +49,8 @@ class StoryState(BaseModel):
     audio_assets: list[MediaAsset] = Field(default_factory=list)
     image_assets: list[MediaAsset] = Field(default_factory=list)
     final_episode_key: str | None = None
+    final_video_key: str | None = None
+    output_format: str = "audio"
 
     # Set only on a regeneration run. Stages read it to narrow what they touch.
     regen: ValidatedDirective | None = None
