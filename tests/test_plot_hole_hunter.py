@@ -16,6 +16,7 @@ from daastaan_contracts import (
     ConsistencyAnalysisOutput,
     ConsistencyCheckStatus,
     ConsistencyFindingOutput,
+    Queue,
     StoryStatus,
 )
 from sqlalchemy.exc import IntegrityError
@@ -98,6 +99,14 @@ def test_review_maps_only_known_references(state_after_dialogue) -> None:
                 suggestion="Add an earlier reveal or remove the claim.",
             ),
             ConsistencyFindingOutput(
+                severity="warning",
+                type="continuity",
+                scene_index=1,
+                line_id="line_0001",
+                explanation="The cited evidence belongs to an earlier scene.",
+                suggestion="Cite a line from this scene or make this scene-level.",
+            ),
+            ConsistencyFindingOutput(
                 severity="critical",
                 type="causality",
                 scene_index=999,
@@ -111,13 +120,17 @@ def test_review_maps_only_known_references(state_after_dialogue) -> None:
     summary, findings = review_story_consistency(state_after_dialogue, gateway)  # type: ignore[arg-type]
 
     assert summary == "A concise review."
-    assert len(findings) == 2
+    assert len(findings) == 3
     assert findings[0].scene_id == "scene_00"
     assert findings[0].line_id == "line_0001"
     # An unknown line reference is removed while its valid scene-level warning
     # remains useful; an unknown scene makes the full finding unusable.
     assert findings[1].scene_id == "scene_01"
     assert findings[1].line_id is None
+    # A known line from another scene is also discarded.  Otherwise the UI
+    # would present a false evidence location for a valid scene-level finding.
+    assert findings[2].scene_id == "scene_01"
+    assert findings[2].line_id is None
     call = gateway.calls[0]
     assert call["kind"] == "light"
     assert "raw_text" not in call["user_content"]
@@ -176,7 +189,7 @@ def test_task_persists_sanitised_result(in_memory_session, state_after_dialogue)
     ]
 
 
-def test_redelivered_task_does_not_rebill_an_active_lease(
+def test_redelivered_task_schedules_a_non_paying_wakeup_for_an_active_lease(
     in_memory_session, state_after_dialogue
 ) -> None:
     user, story, version, _ = _persist_ready_story(in_memory_session, state_after_dialogue)
@@ -200,10 +213,16 @@ def test_redelivered_task_does_not_rebill_an_active_lease(
         patch("daastaan_agent.tasks.session_scope", same_session),
         patch("daastaan_agent.tasks.ModelGateway") as gateway,
         patch("daastaan_agent.tasks.init_tracing"),
+        patch.object(check_story_consistency, "apply_async") as wakeup,
     ):
         assert check_story_consistency.run(check.id, user.id) == check.id
 
     gateway.assert_not_called()
+    wakeup.assert_called_once()
+    wakeup_kwargs = wakeup.call_args.kwargs
+    assert wakeup_kwargs["kwargs"] == {"check_id": check.id, "user_id": user.id}
+    assert wakeup_kwargs["queue"] == Queue.AGENTS.value
+    assert 20 * 60 <= wakeup_kwargs["countdown"] <= 20 * 60 + 2
     stored = in_memory_session.get(ConsistencyCheck, check.id)
     assert stored is not None
     assert stored.status == ConsistencyCheckStatus.RUNNING.value
@@ -245,6 +264,42 @@ def test_stale_lease_is_reclaimed_and_released_after_completion(
     assert stored.status == ConsistencyCheckStatus.SUCCEEDED.value
     assert stored.run_token != old_token
     assert stored.active_key is None
+    assert gateway.calls
+
+
+def test_running_row_without_a_lease_timestamp_is_reclaimed(
+    in_memory_session, state_after_dialogue
+) -> None:
+    user, story, version, _ = _persist_ready_story(in_memory_session, state_after_dialogue)
+    abandoned_token = "-".join(("incomplete", "lease", "write"))
+    check = ConsistencyCheck(
+        story_id=story.id,
+        version_id=version.id,
+        user_id=user.id,
+        status=ConsistencyCheckStatus.RUNNING.value,
+        run_token=abandoned_token,
+        active_key=version.id,
+    )
+    in_memory_session.add(check)
+    in_memory_session.commit()
+    gateway = ReviewGateway(_result())
+
+    @contextmanager
+    def same_session():
+        yield in_memory_session
+
+    with (
+        patch("daastaan_agent.tasks.session_scope", same_session),
+        patch("daastaan_agent.tasks.ModelGateway", return_value=gateway),
+        patch("daastaan_agent.tasks.init_tracing"),
+        patch("daastaan_agent.tasks.repo.publish"),
+    ):
+        assert check_story_consistency.run(check.id, user.id) == check.id
+
+    stored = in_memory_session.get(ConsistencyCheck, check.id)
+    assert stored is not None
+    assert stored.status == ConsistencyCheckStatus.SUCCEEDED.value
+    assert stored.run_token != abandoned_token
     assert gateway.calls
 
 

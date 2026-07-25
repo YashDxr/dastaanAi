@@ -97,12 +97,18 @@ def sanitise_analysis(
             )
             continue
 
-        line_id = raw.line_id if raw.line_id in known_lines else None
+        referenced_line = known_lines.get(raw.line_id) if raw.line_id else None
+        line_id = (
+            raw.line_id
+            if referenced_line is not None and referenced_line.scene_id == scene.id
+            else None
+        )
         if raw.line_id and line_id is None:
             log.warning(
-                "consistency_unknown_line_reference",
+                "consistency_invalid_line_reference",
                 story_id=state.story_id,
                 line_id=raw.line_id,
+                scene_id=scene.id,
             )
 
         explanation = _display_text(raw.explanation, limit=MAX_EXPLANATION_CHARS)

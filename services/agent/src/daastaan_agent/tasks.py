@@ -14,6 +14,7 @@ pipeline partway through.
 
 import time
 from datetime import UTC, datetime, timedelta
+from math import ceil
 from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
@@ -1153,6 +1154,45 @@ _CONSISTENCY_RETRYING = "Consistency check is retrying."
 # means a live worker cannot be superseded, while a worker-lost task eventually
 # becomes reclaimable on redelivery instead of remaining "running" forever.
 _CONSISTENCY_LEASE = timedelta(minutes=20)
+_CONSISTENCY_LEASE_WAKEUP_BUFFER_SECONDS = 1
+
+
+def _as_utc(value: datetime) -> datetime:
+    """Normalise timestamps read from SQLite/Postgres before lease arithmetic."""
+    return value.replace(tzinfo=UTC) if value.tzinfo is None else value.astimezone(UTC)
+
+
+def _consistency_lease_wakeup_delay(check: ConsistencyCheck) -> int | None:
+    """Return a safe wake-up delay for a currently held lease, if any.
+
+    A redelivered Celery task must not acknowledge the only recovery signal for
+    a worker that died after claiming the row.  Scheduling a lightweight wakeup
+    at the expiry boundary lets that later delivery reclaim the lease without
+    making a second model call while the original worker is still healthy.
+    """
+    if check.status != ConsistencyCheckStatus.RUNNING.value or check.started_at is None:
+        return None
+
+    remaining = (_as_utc(check.started_at) + _CONSISTENCY_LEASE - _utcnow()).total_seconds()
+    # ``ceil`` means the ETA never rounds down before the lease boundary; the
+    # small buffer covers broker timing granularity and host clock jitter.
+    return max(1, ceil(remaining) + _CONSISTENCY_LEASE_WAKEUP_BUFFER_SECONDS)
+
+
+def _schedule_consistency_lease_wakeup(
+    task: Any, *, check_id: str, user_id: str, countdown: int
+) -> None:
+    """Queue a non-paying recovery delivery on the same agents queue.
+
+    ``RequestIdTask.apply_async`` carries the current request-id header forward
+    automatically, so the recovery remains connected to the original browser
+    request in worker logs.
+    """
+    task.apply_async(
+        kwargs={"check_id": check_id, "user_id": user_id},
+        queue=Queue.AGENTS.value,
+        countdown=countdown,
+    )
 
 
 def _claim_consistency_check(session: Any, check: ConsistencyCheck) -> str | None:
@@ -1174,12 +1214,8 @@ def _claim_consistency_check(session: Any, check: ConsistencyCheck) -> str | Non
     claimed_at = _utcnow()
     stale_before = claimed_at - _CONSISTENCY_LEASE
     if check.status == ConsistencyCheckStatus.RUNNING.value:
-        if check.started_at is None:
-            return None
-        started_at = check.started_at
-        if started_at.tzinfo is None:
-            started_at = started_at.replace(tzinfo=UTC)
-        if started_at > stale_before:
+        started_at = _as_utc(check.started_at) if check.started_at is not None else None
+        if started_at is not None and started_at > stale_before:
             return None
 
     run_token = uuid4().hex
@@ -1187,8 +1223,10 @@ def _claim_consistency_check(session: Any, check: ConsistencyCheck) -> str | Non
         ConsistencyCheck.status == ConsistencyCheckStatus.PENDING.value,
         and_(
             ConsistencyCheck.status == ConsistencyCheckStatus.RUNNING.value,
-            ConsistencyCheck.started_at.is_not(None),
-            ConsistencyCheck.started_at <= stale_before,
+            or_(
+                ConsistencyCheck.started_at.is_(None),
+                ConsistencyCheck.started_at <= stale_before,
+            ),
         ),
     )
     result = session.execute(
@@ -1293,8 +1331,26 @@ def check_story_consistency(self, check_id: str, user_id: str) -> str:  # type: 
 
             run_token = _claim_consistency_check(session, check)
             if run_token is None:
-                # A duplicate/redelivered task observes a current worker or a
-                # finished result and exits before touching the paid gateway.
+                # Refresh after a failed conditional UPDATE: this delivery may
+                # have read ``pending`` just before a competing worker claimed
+                # it.  In either that race or a direct redelivery, a fresh
+                # running lease needs a later wakeup so a worker crash does not
+                # strand the check forever after this task is acknowledged.
+                session.refresh(check)
+                countdown = _consistency_lease_wakeup_delay(check)
+                if countdown is not None:
+                    _schedule_consistency_lease_wakeup(
+                        self,
+                        check_id=check_id,
+                        user_id=check.user_id,
+                        countdown=countdown,
+                    )
+                    log.info(
+                        "consistency_check_lease_wakeup_scheduled",
+                        check_id=check_id,
+                        countdown_seconds=countdown,
+                    )
+                # A duplicate/redelivered task never touches the paid gateway.
                 return check_id
 
             story_id, version_id, owner_id = check.story_id, check.version_id, check.user_id
