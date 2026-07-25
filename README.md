@@ -106,11 +106,23 @@ make worker         # one worker across all queues
 ### Local background music (Apple Silicon)
 
 The BGM model stays in a native macOS sidecar so its MLX runtime can access
-Metal; Docker workers call it over a signed private HTTP API. Start with
-`MUSIC_ENABLED=false`, then follow [the local music sidecar guide](docs/guides/local-music-sidecar.md).
-The feature flag and URL live in `.env`; copy `.env.music.example` to the
-gitignored `.env.music` for the credentials that Compose injects into
-`worker-music` only.
+Metal; Docker workers call it over a signed private HTTP API.
+
+**If you are the music Mac owner** — start the sidecar with `make music-service`
+(already configured with Tailscale Serve on
+`https://subramanyas-macbook-air.tail70ba05.ts.net`).
+
+**If you are a teammate** running the Docker stack on a different Mac — join the
+same Tailscale account, then set in your `.env`:
+
+```dotenv
+MUSIC_ENABLED=true
+MUSIC_SERVICE_BASE_URL=https://subramanyas-macbook-air.tail70ba05.ts.net
+```
+
+Get the credential values (`MUSIC_SERVICE_TOKEN`, `MUSIC_SERVICE_HMAC_SECRET`)
+from the music Mac owner and put them in your `.env.music`. Full steps in
+[the local music sidecar guide](docs/guides/local-music-sidecar.md) § 4.
 
 ## How a generation flows
 
