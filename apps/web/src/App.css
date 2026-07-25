@@ -728,6 +728,7 @@
 .player,
 .script-panel,
 .alternate-endings-panel,
+.consistency-panel,
 .feedback-panel,
 .cast-panel,
 .scenes-panel,
@@ -751,6 +752,7 @@
 .player h2,
 .script-panel h2,
 .alternate-endings-panel h2,
+.consistency-panel h2,
 .feedback-panel h2 {
   font-family: var(--display);
   font-size: 1.45rem;
@@ -1011,6 +1013,98 @@
   font-size: 0.82rem;
   font-weight: 500;
   padding: 0;
+}
+
+/* Plot Hole Hunter ------------------------------------------------------ */
+
+.consistency-head {
+  align-items: flex-start;
+}
+
+.consistency-head .muted {
+  margin: 0.45rem 0 0;
+  max-width: 42rem;
+  font-size: 0.9rem;
+  line-height: 1.5;
+}
+
+.consistency-status,
+.consistency-clear {
+  margin: 0.9rem 0 0;
+  line-height: 1.5;
+}
+
+.consistency-status.pending,
+.consistency-status.running {
+  color: var(--amber);
+}
+
+.consistency-status.failed {
+  color: var(--danger);
+}
+
+.consistency-status.succeeded,
+.consistency-clear {
+  color: var(--ok);
+}
+
+.consistency-findings {
+  list-style: none;
+  padding: 0;
+  margin: 1rem 0 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.consistency-findings li {
+  border-left: 3px solid var(--amber);
+  border-radius: 0 10px 10px 0;
+  background: color-mix(in srgb, var(--amber) 6%, transparent);
+  padding: 0.75rem 0.85rem;
+}
+
+.consistency-findings li.critical {
+  border-left-color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 5%, transparent);
+}
+
+.finding-meta {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  color: var(--ink-soft);
+  font-size: 0.76rem;
+  text-transform: capitalize;
+}
+
+.finding-severity {
+  border-radius: 999px;
+  padding: 0.12rem 0.42rem;
+  background: color-mix(in srgb, var(--amber) 18%, transparent);
+  color: color-mix(in srgb, var(--amber) 82%, var(--ink));
+  font-weight: 600;
+}
+
+.finding-severity.critical {
+  background: color-mix(in srgb, var(--danger) 13%, transparent);
+  color: var(--danger);
+}
+
+.finding-location {
+  color: var(--teal-deep);
+  font-size: 0.8rem;
+  margin: 0.55rem 0 0;
+}
+
+.consistency-findings li > p:not(.finding-location) {
+  margin: 0.4rem 0 0;
+  font-size: 0.9rem;
+  line-height: 1.5;
+}
+
+.finding-suggestion {
+  color: var(--ink-soft);
 }
 
 .cast-panel ul {

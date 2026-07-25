@@ -8,7 +8,7 @@ contract and neither React app hand-writes an interface.
 from datetime import datetime
 from typing import Any, Literal
 
-from daastaan_contracts import Scope, StageName, limits
+from daastaan_contracts import ConsistencyCheckStatus, ConsistencyFinding, Scope, StageName, limits
 from pydantic import BaseModel, EmailStr, Field
 
 # --- auth ------------------------------------------------------------------
@@ -191,6 +191,30 @@ class DispatchAccepted(BaseModel):
     version_id: str
     stages: list[str]
     task_id: str
+
+
+# --- Plot Hole Hunter ------------------------------------------------------
+
+
+class ConsistencyCheckOut(BaseModel):
+    """Safe projection of one read-only continuity review.
+
+    Findings are already strict-schema validated and reference-checked by the
+    worker. The API still validates them through this DTO before returning them
+    so a malformed database value can never become arbitrary client content.
+    """
+
+    id: str
+    story_id: str
+    version_id: str
+    status: ConsistencyCheckStatus
+    task_id: str | None
+    summary: str | None
+    findings: list[ConsistencyFinding]
+    error: str | None
+    created_at: datetime
+    started_at: datetime | None
+    finished_at: datetime | None
 
 
 # --- admin -----------------------------------------------------------------

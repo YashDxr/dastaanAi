@@ -34,6 +34,10 @@ MAX_IMAGES_PER_STORY = MAX_SCENES
 # Per user, per rolling window.
 RATE_LIMIT_GENERATIONS = 5
 RATE_LIMIT_REGENERATIONS = 20
+# A cheap, on-demand editorial pass, but still a paid model call. This lets a
+# listener rerun it after revisions without turning the button into an
+# unbounded prompt endpoint.
+RATE_LIMIT_CONSISTENCY_CHECKS = 10
 RATE_LIMIT_WINDOW_SECONDS = 3600
 
 # Bounded concurrency for per-line TTS so one story cannot saturate the media pool.

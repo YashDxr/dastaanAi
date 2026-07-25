@@ -243,6 +243,33 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/stories/{story_id}/consistency-checks": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Consistency Checks
+         * @description Return the recent reviews for the current version only.
+         *
+         *     A result for an older branch must never be displayed as a review of the
+         *     current ending, so version is part of the query rather than just the story.
+         */
+        get: operations["list_consistency_checks_api_stories__story_id__consistency_checks_get"];
+        put?: never;
+        /**
+         * Create Consistency Check
+         * @description Queue one idempotent-in-flight, lightweight continuity review.
+         */
+        post: operations["create_consistency_check_api_stories__story_id__consistency_checks_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/media/{asset_id}": {
         parameters: {
             query?: never;
@@ -513,6 +540,58 @@ export interface paths {
         patch: operations["preview_settings_api_settings_patch"];
         trace?: never;
     };
+    "/api/ingest": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Upload */
+        post: operations["upload_api_ingest_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/ingest/{ingest_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Ingest */
+        get: operations["get_ingest_api_ingest__ingest_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/stories/{story_id}/exports": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Exports */
+        get: operations["list_exports_api_stories__story_id__exports_get"];
+        put?: never;
+        /** Create Export */
+        post: operations["create_export_api_stories__story_id__exports_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/stories/{story_id}/events": {
         parameters: {
             query?: never;
@@ -612,6 +691,75 @@ export interface components {
              */
             created_at?: string;
         };
+        /** Body_upload_api_ingest_post */
+        Body_upload_api_ingest_post: {
+            /** File */
+            file: string;
+        };
+        /**
+         * ConsistencyCheckOut
+         * @description Safe projection of one read-only continuity review.
+         *
+         *     Findings are already strict-schema validated and reference-checked by the
+         *     worker. The API still validates them through this DTO before returning them
+         *     so a malformed database value can never become arbitrary client content.
+         */
+        ConsistencyCheckOut: {
+            /** Id */
+            id: string;
+            /** Story Id */
+            story_id: string;
+            /** Version Id */
+            version_id: string;
+            status: components["schemas"]["ConsistencyCheckStatus"];
+            /** Task Id */
+            task_id: string | null;
+            /** Summary */
+            summary: string | null;
+            /** Findings */
+            findings: components["schemas"]["ConsistencyFinding"][];
+            /** Error */
+            error: string | null;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Started At */
+            started_at: string | null;
+            /** Finished At */
+            finished_at: string | null;
+        };
+        /**
+         * ConsistencyCheckStatus
+         * @description Lifecycle of a read-only Plot Hole Hunter request.
+         * @enum {string}
+         */
+        ConsistencyCheckStatus: "pending" | "running" | "succeeded" | "failed";
+        /**
+         * ConsistencyFinding
+         * @description A checked, user-safe finding persisted by the worker and returned by API.
+         */
+        ConsistencyFinding: {
+            /**
+             * Severity
+             * @enum {string}
+             */
+            severity: "critical" | "warning";
+            /**
+             * Type
+             * @enum {string}
+             */
+            type: "knowledge" | "timeline" | "character" | "causality" | "continuity";
+            /** Scene Id */
+            scene_id: string;
+            /** Line Id */
+            line_id: string | null;
+            /** Explanation */
+            explanation: string;
+            /** Suggestion */
+            suggestion: string;
+        };
         /** CostRow */
         CostRow: {
             /** Label */
@@ -686,6 +834,41 @@ export interface components {
             /** Task Id */
             task_id: string;
         };
+        /** ExportFormatOut */
+        ExportFormatOut: {
+            /** Format */
+            format: string;
+            /** Ready */
+            ready: boolean;
+            /** Url */
+            url: string | null;
+            /** Size Bytes */
+            size_bytes: number | null;
+            /** Label */
+            label: string;
+            /** Content Type */
+            content_type: string;
+            /** Detail */
+            detail: string;
+            /** Recommended */
+            recommended: boolean;
+        };
+        /** ExportOut */
+        ExportOut: {
+            /** Format */
+            format: string;
+            /** Ready */
+            ready: boolean;
+            /** Url */
+            url: string | null;
+            /** Size Bytes */
+            size_bytes: number | null;
+        };
+        /** ExportRequest */
+        ExportRequest: {
+            /** Format */
+            format: string;
+        };
         /** FeedbackOut */
         FeedbackOut: {
             /** Id */
@@ -723,6 +906,38 @@ export interface components {
         HTTPValidationError: {
             /** Detail */
             detail?: components["schemas"]["ValidationError"][];
+        };
+        /** IngestAccepted */
+        IngestAccepted: {
+            /** Ingest Id */
+            ingest_id: string;
+            /** Filename */
+            filename: string;
+        };
+        /** IngestOut */
+        IngestOut: {
+            /** Id */
+            id: string;
+            /** Filename */
+            filename: string;
+            /** Status */
+            status: string;
+            /** Method */
+            method: string | null;
+            /** Page Count */
+            page_count: number | null;
+            /** Raw Chars */
+            raw_chars: number | null;
+            /** Cleaned Text */
+            cleaned_text: string | null;
+            /** Title Hint */
+            title_hint: string | null;
+            /** Genre Hint */
+            genre_hint: string | null;
+            /** Notes */
+            notes: string | null;
+            /** Error */
+            error: string | null;
         };
         /** JobOut */
         JobOut: {
@@ -1494,9 +1709,73 @@ export interface operations {
             };
         };
     };
-    stream_asset_api_media__asset_id__get: {
+    list_consistency_checks_api_stories__story_id__consistency_checks_get: {
         parameters: {
             query?: never;
+            header?: never;
+            path: {
+                story_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConsistencyCheckOut"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_consistency_check_api_stories__story_id__consistency_checks_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                story_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConsistencyCheckOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    stream_asset_api_media__asset_id__get: {
+        parameters: {
+            query?: {
+                download?: boolean;
+            };
             header?: {
                 Range?: string | null;
             };
@@ -1901,6 +2180,136 @@ export interface operations {
                     "application/json": {
                         [key: string]: unknown;
                     };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    upload_api_ingest_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "multipart/form-data": components["schemas"]["Body_upload_api_ingest_post"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IngestAccepted"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_ingest_api_ingest__ingest_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                ingest_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IngestOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_exports_api_stories__story_id__exports_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                story_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ExportFormatOut"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_export_api_stories__story_id__exports_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                story_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ExportRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ExportOut"];
                 };
             };
             /** @description Validation Error */

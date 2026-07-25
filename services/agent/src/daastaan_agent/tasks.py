@@ -13,8 +13,9 @@ pipeline partway through.
 """
 
 import time
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any
+from uuid import uuid4
 
 import redis as redis_lib
 import structlog
@@ -29,9 +30,17 @@ from daastaan_common import (
     prepare_regeneration_state,
     session_scope,
 )
-from daastaan_common.models import Feedback, IngestJob, MediaAsset, Story, StoryVersion
+from daastaan_common.models import (
+    ConsistencyCheck,
+    Feedback,
+    IngestJob,
+    MediaAsset,
+    Story,
+    StoryVersion,
+)
 from daastaan_contracts import (
     AssetKind,
+    ConsistencyCheckStatus,
     FeedbackStatus,
     IngestStatus,
     JobStatus,
@@ -45,6 +54,7 @@ from daastaan_contracts import (
     limits,
     plan_stages,
 )
+from sqlalchemy import and_, or_, update
 from sqlmodel import select
 
 from . import prompts, repo
@@ -66,6 +76,7 @@ from .ingest import ExtractionError
 
 if TYPE_CHECKING:
     from .ingest import Extraction as IngestExtraction
+from .consistency import review_story_consistency
 from .gateway import PERMANENT_FAILURES, ModelGateway, ModerationBlocked
 from .graph import run_agent_stages
 from .music import MusicServiceClient, MusicServiceError, build_music_brief
@@ -1131,6 +1142,228 @@ def _interpret_feedback(
         target_id, directive.instruction_delta,
     ).apply_async(queue=Queue.AGENTS.value)
     return new_version_id
+
+
+# --- Plot Hole Hunter ------------------------------------------------------
+
+
+_CONSISTENCY_FAILURE = "Consistency check could not be completed. Please try again."
+_CONSISTENCY_RETRYING = "Consistency check is retrying."
+# The generic Celery task hard limit is 15 minutes. A lease longer than that
+# means a live worker cannot be superseded, while a worker-lost task eventually
+# becomes reclaimable on redelivery instead of remaining "running" forever.
+_CONSISTENCY_LEASE = timedelta(minutes=20)
+
+
+def _claim_consistency_check(session: Any, check: ConsistencyCheck) -> str | None:
+    """Atomically claim the one model call allowed for a check row.
+
+    Celery is at-least-once. Two deliveries can both read ``pending`` before
+    either commits, so inspecting Python state is insufficient; the conditional
+    SQL UPDATE is the actual idempotency boundary. A long-dead running lease is
+    eligible again so worker loss does not strand the UI forever.
+    """
+    if check.status == ConsistencyCheckStatus.SUCCEEDED.value:
+        return None
+    if check.status not in {
+        ConsistencyCheckStatus.PENDING.value,
+        ConsistencyCheckStatus.RUNNING.value,
+    }:
+        return None
+
+    claimed_at = _utcnow()
+    stale_before = claimed_at - _CONSISTENCY_LEASE
+    if check.status == ConsistencyCheckStatus.RUNNING.value:
+        if check.started_at is None:
+            return None
+        started_at = check.started_at
+        if started_at.tzinfo is None:
+            started_at = started_at.replace(tzinfo=UTC)
+        if started_at > stale_before:
+            return None
+
+    run_token = uuid4().hex
+    claimable = or_(
+        ConsistencyCheck.status == ConsistencyCheckStatus.PENDING.value,
+        and_(
+            ConsistencyCheck.status == ConsistencyCheckStatus.RUNNING.value,
+            ConsistencyCheck.started_at.is_not(None),
+            ConsistencyCheck.started_at <= stale_before,
+        ),
+    )
+    result = session.execute(
+        update(ConsistencyCheck)
+        # This condition intentionally belongs entirely to the database.  In
+        # SQLite test sessions SQLAlchemy otherwise tries to evaluate the
+        # timestamp comparison against an in-memory naïve datetime before the
+        # atomic UPDATE runs, while the production/Postgres comparison is safe.
+        .execution_options(synchronize_session=False)
+        .where(ConsistencyCheck.id == check.id, claimable)
+        .values(
+            status=ConsistencyCheckStatus.RUNNING.value,
+            error=None,
+            started_at=claimed_at,
+            finished_at=None,
+            run_token=run_token,
+            # Legacy/manual pending rows can lack the API-created active key.
+            # Restoring it here preserves the database-level one-active-review
+            # invariant for every row that a worker touches.
+            active_key=check.version_id,
+        )
+    )
+    if result.rowcount != 1:
+        return None
+    session.commit()
+    return run_token
+
+
+def _record_consistency_failure(
+    check_id: str, *, retrying: bool, run_token: str | None
+) -> None:
+    """Persist a public-safe failure state outside the rolled-back task session."""
+    try:
+        with session_scope() as session:
+            check = session.get(ConsistencyCheck, check_id)
+            if check is None:
+                return
+            story_id = check.story_id
+            check_status = (
+                ConsistencyCheckStatus.PENDING.value
+                if retrying
+                else ConsistencyCheckStatus.FAILED.value
+            )
+            error = _CONSISTENCY_RETRYING if retrying else _CONSISTENCY_FAILURE
+            where = [ConsistencyCheck.id == check_id]
+            if run_token:
+                # Never let a crashed/slow old lease overwrite a newer worker's
+                # result after the stale-lease recovery path has reclaimed it.
+                where.append(ConsistencyCheck.run_token == run_token)
+            else:
+                where.append(ConsistencyCheck.status == ConsistencyCheckStatus.PENDING.value)
+            values: dict[str, Any] = {
+                "status": check_status,
+                "error": error,
+                "finished_at": None if retrying else _utcnow(),
+            }
+            if not retrying:
+                values["active_key"] = None
+            result = session.execute(
+                update(ConsistencyCheck)
+                .where(*where)
+                .values(**values)
+            )
+            if result.rowcount != 1:
+                return
+            session.commit()
+        repo.publish(
+            story_id,
+            {
+                "type": "consistency_check",
+                "check_id": check_id,
+                "status": check_status,
+            },
+        )
+    except Exception:
+        # This is a status aid rather than the task result itself; never hide
+        # the original model/database exception behind a secondary write error.
+        log.exception("consistency_failure_not_recorded", check_id=check_id)
+
+
+@celery_app.task(name=TaskName.CONSISTENCY_CHECK.value, bind=True, **RETRY_KWARGS)
+def check_story_consistency(self, check_id: str, user_id: str) -> str:  # type: ignore[no-untyped-def]
+    """Run a lightweight, read-only consistency review for one finished version.
+
+    This task does not create a ``Job`` row, alter ``Story.status``, or enter the
+    stage registry: a quality inspection must not make a finished episode look
+    like it is being regenerated. Its own durable row gives the UI something to
+    poll and preserves a short audit history.
+    """
+    # The durable check row, not a broker payload, is the authority for story
+    # ownership and cost attribution. Keeping this argument preserves the wire
+    # contract with the API dispatcher while preventing a tampered value from
+    # selecting a different account for the model ledger.
+    del user_id
+    init_tracing()
+    run_token: str | None = None
+    try:
+        with session_scope() as session:
+            check = session.get(ConsistencyCheck, check_id)
+            if check is None:
+                raise LookupError(f"consistency check {check_id} not found")
+
+            run_token = _claim_consistency_check(session, check)
+            if run_token is None:
+                # A duplicate/redelivered task observes a current worker or a
+                # finished result and exits before touching the paid gateway.
+                return check_id
+
+            story_id, version_id, owner_id = check.story_id, check.version_id, check.user_id
+            version = session.get(StoryVersion, version_id)
+            if version is None or version.story_id != story_id:
+                raise LookupError("consistency check version is unavailable")
+
+            state = repo.load_state(session, version_id)
+            if state.story_id != story_id or not state.scenes or not state.lines:
+                raise ValueError("consistency check requires a completed story structure")
+
+            gateway = ModelGateway(
+                session,
+                stage="plot_hole_hunter",
+                version_id=version_id,
+                user_id=owner_id,
+                story_id=story_id,
+            )
+            summary, findings = review_story_consistency(state, gateway)
+
+            # Persist only the verified, bounded model projection returned by
+            # ``review_story_consistency``; never save a raw completion.
+            result = session.execute(
+                update(ConsistencyCheck)
+                .where(
+                    ConsistencyCheck.id == check_id,
+                    ConsistencyCheck.status == ConsistencyCheckStatus.RUNNING.value,
+                    ConsistencyCheck.run_token == run_token,
+                )
+                .values(
+                    summary=summary,
+                    findings_json=[finding.model_dump(mode="json") for finding in findings],
+                    status=ConsistencyCheckStatus.SUCCEEDED.value,
+                    error=None,
+                    finished_at=_utcnow(),
+                    active_key=None,
+                )
+            )
+            if result.rowcount != 1:
+                # A stale worker lost its lease while a newer one took over.
+                # Its output is intentionally discarded rather than overwriting
+                # the durable result, even though the call has already completed.
+                session.commit()
+                log.warning("consistency_check_lease_lost", check_id=check_id)
+                return check_id
+            session.commit()
+
+        repo.publish(
+            story_id,
+            {
+                "type": "consistency_check",
+                "check_id": check_id,
+                "status": ConsistencyCheckStatus.SUCCEEDED.value,
+            },
+        )
+        log.info(
+            "consistency_check_completed",
+            check_id=check_id,
+            version_id=version_id,
+            findings=len(findings),
+        )
+        return check_id
+    except Exception as exc:
+        _record_consistency_failure(
+            check_id,
+            retrying=_will_retry(self, exc),
+            run_token=run_token,
+        )
+        raise
 
 
 # --- audio export ----------------------------------------------------------

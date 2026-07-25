@@ -50,6 +50,15 @@ class FeedbackStatus(StrEnum):
     FAILED = "failed"
 
 
+class ConsistencyCheckStatus(StrEnum):
+    """Lifecycle of a read-only Plot Hole Hunter request."""
+
+    PENDING = "pending"
+    RUNNING = "running"
+    SUCCEEDED = "succeeded"
+    FAILED = "failed"
+
+
 class StoryStatus(StrEnum):
     DRAFT = "draft"
     GENERATING = "generating"

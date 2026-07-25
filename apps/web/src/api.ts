@@ -1,6 +1,7 @@
 import { ApiError, apiFetch, openProgressStream } from '@daastaan/api-types'
 import type {
   DispatchAccepted,
+  ConsistencyCheck,
   ExportFormat,
   FeedbackEntry,
   Ingest,
@@ -54,6 +55,10 @@ export const stories = {
       body: JSON.stringify({ raw_text }),
     }),
   feedbackHistory: (id: string) => apiFetch<FeedbackEntry[]>(`/stories/${id}/feedback`),
+  consistencyChecks: (id: string) =>
+    apiFetch<ConsistencyCheck[]>(`/stories/${id}/consistency-checks`),
+  startConsistencyCheck: (id: string) =>
+    apiFetch<ConsistencyCheck>(`/stories/${id}/consistency-checks`, { method: 'POST' }),
   exports: (id: string) => apiFetch<ExportFormat[]>(`/stories/${id}/exports`),
   requestExport: (id: string, format: string) =>
     apiFetch<{ format: string; ready: boolean; url: string | null; size_bytes: number | null }>(

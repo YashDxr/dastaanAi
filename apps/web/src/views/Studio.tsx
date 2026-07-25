@@ -3,6 +3,7 @@ import { AppHeader } from '../components/AppHeader'
 import { AlternateEndings } from '../components/AlternateEndings'
 import { AudioPlayer } from '../components/AudioPlayer'
 import { FeedbackComposer } from '../components/FeedbackComposer'
+import { ConsistencyPanel } from '../components/ConsistencyPanel'
 import { ProgressStepper } from '../components/ProgressStepper'
 import { ScenePanel } from '../components/ScenePanel'
 import { ScriptPanel } from '../components/ScriptPanel'
@@ -317,6 +318,13 @@ export function Studio({ user, storyId, onLogout, onHome, onCompose }: Props) {
                     state={state}
                     disabled={busy || regenerating}
                     onRequested={refresh}
+                  />
+                )}
+                {detail.story.status === 'ready' && state && state.scenes.length > 0 && state.lines.length > 0 && (
+                  <ConsistencyPanel
+                    storyId={storyId}
+                    state={state}
+                    disabled={busy || regenerating}
                   />
                 )}
                 <FeedbackComposer

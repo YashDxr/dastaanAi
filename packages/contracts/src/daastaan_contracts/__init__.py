@@ -5,10 +5,10 @@ the frontends. Deliberately depends only on Pydantic so that adding it to a
 service never drags in a database driver or an LLM SDK.
 """
 
-from .languages import language_name
 from .enums import (
     AssetKind,
     CharacterRole,
+    ConsistencyCheckStatus,
     FeedbackStatus,
     IngestStatus,
     JobStatus,
@@ -20,9 +20,13 @@ from .enums import (
     VoiceAge,
     VoiceGender,
 )
+from .languages import language_name
 from .models import (
     Character,
     CharacterRegistryOutput,
+    ConsistencyAnalysisOutput,
+    ConsistencyFinding,
+    ConsistencyFindingOutput,
     DialogueLine,
     DialogueScriptOutput,
     EmotionTaggingOutput,
@@ -60,6 +64,10 @@ __all__ = [
     "Character",
     "CharacterRegistryOutput",
     "CharacterRole",
+    "ConsistencyCheckStatus",
+    "ConsistencyAnalysisOutput",
+    "ConsistencyFinding",
+    "ConsistencyFindingOutput",
     "DialogueLine",
     "DialogueScriptOutput",
     "EmotionTaggingOutput",

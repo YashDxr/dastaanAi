@@ -44,6 +44,9 @@ def create_celery(name: str = "daastaan") -> Celery:
             TaskName.GEN_MUSIC.value: {"queue": Queue.MUSIC.value},
             TaskName.ASSEMBLE.value: {"queue": Queue.ASSEMBLY.value},
             TaskName.INTERPRET_FEEDBACK.value: {"queue": Queue.AGENTS.value},
+            # A read-only lightweight-model review, intentionally not a
+            # pipeline stage or a media task.
+            TaskName.CONSISTENCY_CHECK.value: {"queue": Queue.AGENTS.value},
             TaskName.RUN_PIPELINE.value: {"queue": Queue.AGENTS.value},
             TaskName.REGENERATE.value: {"queue": Queue.AGENTS.value},
             TaskName.INGEST_EXTRACT.value: {"queue": Queue.AGENTS.value},
