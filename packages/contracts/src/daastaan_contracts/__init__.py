@@ -34,6 +34,7 @@ from .models import (
     VoiceAssignment,
     MysteryCaseOutput,
     MysteryInterrogationOutput,
+    MysteryValidationOutput,
 )
 from .stages import (
     AGENT_STAGES,
@@ -82,6 +83,7 @@ __all__ = [
     "VoiceAssignment",
     "MysteryCaseOutput",
     "MysteryInterrogationOutput",
+    "MysteryValidationOutput",
     "downstream_from",
     "is_fanout",
     "is_valid_entry",

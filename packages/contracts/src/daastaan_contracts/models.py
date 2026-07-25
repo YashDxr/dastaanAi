@@ -259,3 +259,10 @@ class MysteryInterrogationOutput(Strict):
     emotion: str
     intensity: int
     tts_instructions: str
+
+
+class MysteryValidationOutput(Strict):
+    valid: bool
+    issues: list[str]
+    fair_clue_count: int
+    public_spoiler_detected: bool
