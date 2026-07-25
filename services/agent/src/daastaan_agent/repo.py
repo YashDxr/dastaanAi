@@ -13,8 +13,9 @@ from typing import Any
 import redis
 import structlog
 from daastaan_common import get_settings
-from daastaan_common.models import Job, MediaAsset, Story, StoryVersion
+from daastaan_common.models import Job, MediaAsset, PipelineRun, Story, StoryVersion
 from daastaan_contracts import AssetKind, JobStatus, StageName, StoryState, progress_channel
+from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, select
 
 log = structlog.get_logger(__name__)
@@ -105,6 +106,44 @@ def find_asset(
     ).first()
 
 
+def claim_asset(
+    session: Session,
+    *,
+    version_id: str,
+    kind: AssetKind,
+    dedupe_key: str,
+) -> MediaAsset | None:
+    """Atomically claim a media slot before making the paid API call.
+
+    Inserts a placeholder row with an empty ``object_key``.  If another worker
+    already inserted a row for the same ``(version_id, dedupe_key)`` pair, the
+    unique constraint fires an IntegrityError and we return ``None`` - the
+    caller should skip the generation entirely.  This closes the TOCTOU gap
+    between ``find_asset()`` and ``record_asset()``."""
+    asset = MediaAsset(
+        version_id=version_id,
+        dedupe_key=dedupe_key,
+        kind=kind.value,
+        object_key="",
+    )
+    session.add(asset)
+    try:
+        session.flush()
+    except IntegrityError:
+        session.rollback()
+        log.info("asset_already_claimed", dedupe_key=dedupe_key)
+        return None
+    session.commit()
+    session.refresh(asset)
+    return asset
+
+
+def release_claim(session: Session, asset: MediaAsset) -> None:
+    """Remove a claimed placeholder so a retry can re-claim it."""
+    session.delete(asset)
+    session.commit()
+
+
 def record_asset(
     session: Session,
     *,
@@ -136,3 +175,38 @@ def record_asset(
     session.commit()
     session.refresh(asset)
     return asset
+
+
+# --- pipeline runs --------------------------------------------------------
+
+
+def start_pipeline_run(
+    session: Session,
+    *,
+    version_id: str,
+    mlflow_run_id: str | None = None,
+    langfuse_trace_id: str | None = None,
+) -> PipelineRun:
+    run = PipelineRun(
+        version_id=version_id,
+        mlflow_run_id=mlflow_run_id,
+        langfuse_trace_id=langfuse_trace_id,
+    )
+    session.add(run)
+    session.commit()
+    session.refresh(run)
+    return run
+
+
+def finish_pipeline_run(
+    session: Session,
+    run: PipelineRun,
+    *,
+    status: str,
+    error: str | None = None,
+) -> None:
+    run.status = status
+    run.error = error[:2000] if error else None
+    run.finished_at = datetime.now(UTC)
+    session.add(run)
+    session.commit()
