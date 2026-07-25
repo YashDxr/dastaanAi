@@ -72,7 +72,10 @@ def run_stages_now(body: DebugRunRequest) -> dict[str, object]:
         except LookupError as exc:
             raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from exc
 
-        result: StoryState = run_agent_stages(session, state, body.user_id)
+    # Each graph node opens its own session_scope().
+    result: StoryState = run_agent_stages(state, body.user_id)
+
+    with session_scope() as session:
         repo.save_state(session, result)
 
     return {

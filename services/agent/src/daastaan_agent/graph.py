@@ -16,9 +16,9 @@ import time
 from typing import Annotated, Any
 
 import structlog
+from daastaan_common import session_scope
 from daastaan_contracts import JobStatus, StageName, StoryState
 from langgraph.graph import END, START, StateGraph
-from sqlmodel import Session
 from typing_extensions import TypedDict
 
 from . import repo
@@ -72,11 +72,11 @@ _PARALLEL_SAFE_FIELDS: dict[StageName, set[str]] = {
 }
 
 
-def build_graph(session: Session, user_id: str) -> Any:
+def build_graph(user_id: str) -> Any:
     """Compile the agent stages into a graph with parallel emotion/narrator.
 
-    Session and user are bound at build time because a LangGraph node only
-    receives state; the surrounding infrastructure is closed over instead.
+    Each node opens its own ``session_scope()`` so that parallel branches
+    (emotion_tagging / narrator_persona) never share a SQLAlchemy session.
     """
     builder = StateGraph(GraphState)
 
@@ -85,56 +85,57 @@ def build_graph(session: Session, user_id: str) -> Any:
 
         def run(state: dict[str, Any]) -> dict[str, Any]:
             story_state = StoryState.model_validate(state)
-            job = repo.start_job(
-                session,
-                story_id=story_state.story_id,
-                version_id=story_state.version_id,
-                stage=stage,
-            )
-            t0 = time.monotonic()
-            try:
-                gateway = ModelGateway(
-                    session, stage=stage.value, version_id=story_state.version_id, user_id=user_id
+            with session_scope() as session:
+                job = repo.start_job(
+                    session,
+                    story_id=story_state.story_id,
+                    version_id=story_state.version_id,
+                    stage=stage,
                 )
-                updated = node(session, story_state, gateway)
+                t0 = time.monotonic()
+                try:
+                    gateway = ModelGateway(
+                        session, stage=stage.value, version_id=story_state.version_id, user_id=user_id
+                    )
+                    updated = node(session, story_state, gateway)
 
-                duration_s = time.monotonic() - t0
-                repo.finish_job(session, job, status=JobStatus.SUCCEEDED)
-                repo.save_state(session, updated)
-                log.info(
-                    "stage_completed",
-                    stage=stage.value,
-                    duration_ms=round(duration_s * 1000),
-                )
-                log_mlflow_stage(stage.value, duration_s)
+                    duration_s = time.monotonic() - t0
+                    repo.finish_job(session, job, status=JobStatus.SUCCEEDED)
+                    repo.save_state(session, updated)
+                    log.info(
+                        "stage_completed",
+                        stage=stage.value,
+                        duration_ms=round(duration_s * 1000),
+                    )
+                    log_mlflow_stage(stage.value, duration_s)
 
-                ctx = get_pipeline_context()
-                if ctx:
-                    ctx.stage_timings[stage.value] = duration_s
+                    ctx = get_pipeline_context()
+                    if ctx:
+                        ctx.stage_timings[stage.value] = duration_s
 
-                full = updated.model_dump(mode="python")
-                # For parallel nodes, only return the fields they changed so
-                # LangGraph does not see conflicting writes on LastValue channels.
-                # completed_stages uses an add reducer, so return only the new stage.
-                safe = _PARALLEL_SAFE_FIELDS.get(stage)
-                if safe is not None:
-                    diff = {k: v for k, v in full.items() if k in safe}
-                    diff["completed_stages"] = [stage]
-                    return diff
-                # For sequential nodes, return full state but replace
-                # completed_stages with only the new entry (reducer will add it).
-                full["completed_stages"] = [stage]
-                return full
-            except Exception as exc:
-                duration_s = time.monotonic() - t0
-                repo.finish_job(session, job, status=JobStatus.FAILED, error=str(exc))
-                log.error(
-                    "stage_failed",
-                    stage=stage.value,
-                    duration_ms=round(duration_s * 1000),
-                    error=str(exc),
-                )
-                raise
+                    full = updated.model_dump(mode="python")
+                    # For parallel nodes, only return the fields they changed so
+                    # LangGraph does not see conflicting writes on LastValue channels.
+                    # completed_stages uses an add reducer, so return only the new stage.
+                    safe = _PARALLEL_SAFE_FIELDS.get(stage)
+                    if safe is not None:
+                        diff = {k: v for k, v in full.items() if k in safe}
+                        diff["completed_stages"] = [stage]
+                        return diff
+                    # For sequential nodes, return full state but replace
+                    # completed_stages with only the new entry (reducer will add it).
+                    full["completed_stages"] = [stage]
+                    return full
+                except Exception as exc:
+                    duration_s = time.monotonic() - t0
+                    repo.finish_job(session, job, status=JobStatus.FAILED, error=str(exc))
+                    log.error(
+                        "stage_failed",
+                        stage=stage.value,
+                        duration_ms=round(duration_s * 1000),
+                        error=str(exc),
+                    )
+                    raise
 
         run.__name__ = stage.value
         return run
@@ -167,8 +168,8 @@ def build_graph(session: Session, user_id: str) -> Any:
     return builder.compile()
 
 
-def run_agent_stages(session: Session, state: StoryState, user_id: str) -> StoryState:
-    graph = build_graph(session, user_id)
+def run_agent_stages(state: StoryState, user_id: str) -> StoryState:
+    graph = build_graph(user_id)
     # Convert StoryState to dict for the GraphState TypedDict input.
     # Initialize completed_stages as empty so the add reducer starts clean.
     input_state = state.model_dump(mode="python")

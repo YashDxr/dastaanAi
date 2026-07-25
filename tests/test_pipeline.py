@@ -4,7 +4,8 @@ Runs the LangGraph pipeline end-to-end in-process, verifying stage ordering,
 state flow, and completed_stages tracking - all without any external services.
 """
 
-from unittest.mock import patch
+from contextlib import contextmanager
+from unittest.mock import MagicMock, patch
 
 import pytest
 from daastaan_agent.graph import run_agent_stages
@@ -13,6 +14,12 @@ from daastaan_contracts import JobStatus, StageName, StoryState
 
 def _mock_job(story_id: str) -> object:
     return type("Job", (), {"story_id": story_id, "stage": ""})()
+
+
+@contextmanager
+def _fake_session_scope():
+    """Yield a MagicMock that acts as a session inside ``with session_scope()``."""
+    yield MagicMock()
 
 
 class TestFullPipeline:
@@ -26,6 +33,10 @@ class TestFullPipeline:
                 return_value=mock_gateway,
             ),
             patch("daastaan_agent.graph.repo") as mock_repo,
+            patch(
+                "daastaan_agent.graph.session_scope",
+                side_effect=_fake_session_scope,
+            ),
         ):
             mock_repo.start_job.return_value = _mock_job(
                 sample_state.story_id
@@ -33,9 +44,7 @@ class TestFullPipeline:
             mock_repo.finish_job.return_value = None
             mock_repo.save_state.return_value = None
 
-            result = run_agent_stages(
-                in_memory_session, sample_state, "test-user"
-            )
+            result = run_agent_stages(sample_state, "test-user")
 
         assert isinstance(result, StoryState)
         expected_stages = {
@@ -59,6 +68,10 @@ class TestFullPipeline:
                 return_value=mock_gateway,
             ),
             patch("daastaan_agent.graph.repo") as mock_repo,
+            patch(
+                "daastaan_agent.graph.session_scope",
+                side_effect=_fake_session_scope,
+            ),
         ):
             mock_repo.start_job.return_value = _mock_job(
                 sample_state.story_id
@@ -66,9 +79,7 @@ class TestFullPipeline:
             mock_repo.finish_job.return_value = None
             mock_repo.save_state.return_value = None
 
-            result = run_agent_stages(
-                in_memory_session, sample_state, "test-user"
-            )
+            result = run_agent_stages(sample_state, "test-user")
 
         assert result.mood is not None
         assert result.title is not None
@@ -91,6 +102,10 @@ class TestFullPipeline:
                 return_value=mock_gateway,
             ),
             patch("daastaan_agent.graph.repo") as mock_repo,
+            patch(
+                "daastaan_agent.graph.session_scope",
+                side_effect=_fake_session_scope,
+            ),
         ):
 
             def track_start_job(session, *, story_id, version_id, stage):
@@ -101,9 +116,7 @@ class TestFullPipeline:
             mock_repo.finish_job.return_value = None
             mock_repo.save_state.return_value = None
 
-            run_agent_stages(
-                in_memory_session, sample_state, "test-user"
-            )
+            run_agent_stages(sample_state, "test-user")
 
         # First 4 stages should be in strict order
         assert executed_stages[:4] == [
@@ -128,6 +141,10 @@ class TestFullPipeline:
                 return_value=mock_gateway,
             ),
             patch("daastaan_agent.graph.repo") as mock_repo,
+            patch(
+                "daastaan_agent.graph.session_scope",
+                side_effect=_fake_session_scope,
+            ),
         ):
             mock_repo.start_job.return_value = _mock_job(
                 sample_state.story_id
@@ -135,9 +152,7 @@ class TestFullPipeline:
             mock_repo.finish_job.return_value = None
             mock_repo.save_state.return_value = None
 
-            result = run_agent_stages(
-                in_memory_session, sample_state, "test-user"
-            )
+            result = run_agent_stages(sample_state, "test-user")
 
         dumped = result.model_dump(mode="json")
         restored = StoryState.model_validate(dumped)
@@ -162,14 +177,16 @@ class TestOutputFormatFlow:
                 return_value=mock_gateway,
             ),
             patch("daastaan_agent.graph.repo") as mock_repo,
+            patch(
+                "daastaan_agent.graph.session_scope",
+                side_effect=_fake_session_scope,
+            ),
         ):
             mock_repo.start_job.return_value = _mock_job(state.story_id)
             mock_repo.finish_job.return_value = None
             mock_repo.save_state.return_value = None
 
-            result = run_agent_stages(
-                in_memory_session, state, "test-user"
-            )
+            result = run_agent_stages(state, "test-user")
 
         assert result.output_format == "video"
 
@@ -202,14 +219,16 @@ class TestLanguageFlow:
                 return_value=mock_gateway,
             ),
             patch("daastaan_agent.graph.repo") as mock_repo,
+            patch(
+                "daastaan_agent.graph.session_scope",
+                side_effect=_fake_session_scope,
+            ),
         ):
             mock_repo.start_job.return_value = _mock_job(state.story_id)
             mock_repo.finish_job.return_value = None
             mock_repo.save_state.return_value = None
 
-            result = run_agent_stages(
-                in_memory_session, state, "test-user"
-            )
+            result = run_agent_stages(state, "test-user")
 
         assert result.language == "hi"
 
@@ -239,6 +258,10 @@ class TestGraphErrorHandling:
                 return_value=mock_gateway,
             ),
             patch("daastaan_agent.graph.repo") as mock_repo,
+            patch(
+                "daastaan_agent.graph.session_scope",
+                side_effect=_fake_session_scope,
+            ),
         ):
             mock_repo.start_job.return_value = _mock_job(
                 sample_state.story_id
@@ -247,9 +270,7 @@ class TestGraphErrorHandling:
             mock_repo.save_state.return_value = None
 
             with pytest.raises(ValueError):
-                run_agent_stages(
-                    in_memory_session, sample_state, "test-user"
-                )
+                run_agent_stages(sample_state, "test-user")
 
     def test_failed_node_records_job_failure(
         self, in_memory_session, sample_state, mock_gateway
@@ -263,6 +284,10 @@ class TestGraphErrorHandling:
                 return_value=mock_gateway,
             ),
             patch("daastaan_agent.graph.repo") as mock_repo,
+            patch(
+                "daastaan_agent.graph.session_scope",
+                side_effect=_fake_session_scope,
+            ),
         ):
             mock_repo.start_job.return_value = _mock_job(
                 sample_state.story_id
@@ -271,9 +296,7 @@ class TestGraphErrorHandling:
             mock_repo.save_state.return_value = None
 
             with pytest.raises(ValueError):
-                run_agent_stages(
-                    in_memory_session, sample_state, "test-user"
-                )
+                run_agent_stages(sample_state, "test-user")
 
             fail_calls = [
                 call
