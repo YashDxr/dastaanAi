@@ -48,13 +48,16 @@ from sqlmodel import select
 from . import prompts, repo
 from .assembly import (
     AUDIO_EXPORTS,
+    BGM_AUDIO_EXPORTS,
     AssemblyError,
     Clip,
     SceneFrame,
+    bgm_content_type,
     compose_episode,
     compose_video,
     export_content_type,
     transcode,
+    transcode_bgm,
 )
 
 # Safe to import eagerly: the module keeps pypdf, tesseract and PIL behind
@@ -1198,6 +1201,61 @@ def export_audio(self, version_id: str, user_id: str, fmt: str) -> str:
         asset_id = asset.id
 
     log.info("export_ready", version_id=version_id, fmt=fmt, bytes=len(data))
+    return asset_id
+
+
+@celery_app.task(name=TaskName.EXPORT_BGM.value, bind=True, **RETRY_KWARGS)
+def export_bgm(self, version_id: str, user_id: str, fmt: str) -> str:  # type: ignore[no-untyped-def]
+    """Transcode the generated music bed into a downloadable format.
+
+    The BGM master is a lossless 44.1 kHz stereo WAV, so MP3/FLAC/M4A/Opus here
+    are first-generation encodes from a lossless source — genuinely better than
+    their episode-export equivalents. WAV is never transcoded; callers serve the
+    stored music_bed asset directly (same as the episode master for MP3).
+
+    Runs on the assembly queue alongside episode transcodes.
+    """
+    if fmt not in BGM_AUDIO_EXPORTS:
+        raise ValueError(f"unsupported BGM export format: {fmt}")
+
+    dedupe = f"{AssetKind.BGM_EXPORT.value}:{fmt}"
+
+    with session_scope() as session:
+        if existing := repo.find_asset(session, version_id=version_id, dedupe_key=dedupe):
+            log.info("bgm_export_cached", version_id=version_id, fmt=fmt)
+            return existing.id
+
+        master = session.exec(
+            select(MediaAsset).where(
+                MediaAsset.version_id == version_id,
+                MediaAsset.kind == AssetKind.MUSIC_BED,
+            )
+        ).first()
+        if master is None:
+            raise LookupError(f"no music bed for version {version_id}")
+        master_key, duration_ms = master.object_key, master.duration_ms
+
+    store = get_store()
+    data = transcode_bgm(store.get(master_key), fmt)
+    key = ids.object_key(version_id, AssetKind.BGM_EXPORT, ext=fmt)
+    content_type = bgm_content_type(fmt)
+    store.put(key, data, content_type)
+
+    with session_scope() as session:
+        asset = repo.record_asset(
+            session,
+            version_id=version_id,
+            kind=AssetKind.BGM_EXPORT,
+            dedupe_key=dedupe,
+            object_key=key,
+            content_type=content_type,
+            size_bytes=len(data),
+            duration_ms=duration_ms,
+        )
+        session.commit()
+        asset_id = asset.id
+
+    log.info("bgm_export_ready", version_id=version_id, fmt=fmt, bytes=len(data))
     return asset_id
 
 

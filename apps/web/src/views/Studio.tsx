@@ -116,6 +116,8 @@ export function Studio({ user, storyId, onLogout, onHome, onCompose }: Props) {
   const wantsVideo =
     state?.output_format === 'video' || state?.output_format === 'both'
   const scenes = state?.scenes ?? []
+  const hasMusicBed = playerAssets.some((a) => a.kind === 'music_bed')
+    || stickyAssets.some((a) => a.kind === 'music_bed')
 
   async function respeakLine(lineId: string) {
     setBusy(true)
@@ -217,6 +219,7 @@ export function Studio({ user, storyId, onLogout, onHome, onCompose }: Props) {
                   storyId={storyId}
                   seekLineId={seekLineId}
                   regenerating={regenerating}
+                  hasMusicBed={hasMusicBed}
                   onSeekHandled={() => setSeekLineId(null)}
                 />
                 {finalVideo ? (

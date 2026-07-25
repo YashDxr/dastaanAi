@@ -1,6 +1,14 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { BgmPanel } from './BgmPanel'
 import { ExportPanel } from './ExportPanel'
 import type { Asset, DialogueLine } from '../types'
+
+const DOWNLOAD_ICON = (
+  <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden>
+    <path d="M7 1v8M4 7l3 3 3-3M2 12h10" stroke="currentColor" strokeWidth="1.5"
+      strokeLinecap="round" strokeLinejoin="round"/>
+  </svg>
+)
 
 type Props = {
   assets: Asset[]
@@ -11,8 +19,10 @@ type Props = {
   onSeekHandled?: () => void
   /** Story is regenerating — keep showing the previous episode instead of empty. */
   regenerating?: boolean
-  /** Enables the download panel. Omitted while a mix does not exist yet. */
+  /** Enables the download panels. Omitted while a mix does not exist yet. */
   storyId?: string
+  /** Show the BGM download option when a music bed has been generated. */
+  hasMusicBed?: boolean
 }
 
 function formatTime(seconds: number) {
@@ -51,6 +61,7 @@ export function AudioPlayer({
   onSeekHandled,
   regenerating = false,
   storyId,
+  hasMusicBed = false,
 }: Props) {
   const liveEpisode = useMemo(
     () => assets.find((a) => a.kind === 'final_episode') ?? null,
@@ -256,9 +267,60 @@ export function AudioPlayer({
           </div>
         </div>
       </div>
-      {/* Only offered against a live mix: exporting the previous episode while a
-          rebuild is in flight would hand over a file the user did not ask for. */}
-      {storyId && <ExportPanel storyId={storyId} enabled={!!liveEpisode} />}
+      {storyId && <DownloadsSection storyId={storyId} episodeReady={!!liveEpisode} hasMusicBed={hasMusicBed} />}
     </section>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Unified Downloads section — one toggle, clearly-labelled sub-groups inside.
+// ---------------------------------------------------------------------------
+
+function DownloadsSection({
+  storyId,
+  episodeReady,
+  hasMusicBed,
+}: {
+  storyId: string
+  episodeReady: boolean
+  hasMusicBed: boolean
+}) {
+  const [open, setOpen] = useState(false)
+
+  if (!episodeReady && !hasMusicBed) return null
+
+  return (
+    <div className="downloads-section">
+      <button
+        type="button"
+        className="downloads-toggle"
+        aria-expanded={open}
+        onClick={() => setOpen((v) => !v)}
+      >
+        <span className="downloads-toggle-label">
+          {DOWNLOAD_ICON}
+          Downloads
+        </span>
+        <span className="downloads-toggle-caret" aria-hidden>{open ? '▴' : '▾'}</span>
+      </button>
+
+      {open && (
+        <div className="downloads-body">
+          {episodeReady && (
+            <div className="download-group">
+              <p className="download-group-heading">Episode Audio</p>
+              <ExportPanel storyId={storyId} enabled inline />
+            </div>
+          )}
+
+          {hasMusicBed && (
+            <div className="download-group">
+              <p className="download-group-heading">Background Score</p>
+              <BgmPanel storyId={storyId} inline />
+            </div>
+          )}
+        </div>
+      )}
+    </div>
   )
 }

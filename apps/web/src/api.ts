@@ -56,6 +56,12 @@ export const stories = {
       `/stories/${id}/exports`,
       { method: 'POST', body: JSON.stringify({ format }) },
     ),
+  bgmExports: (id: string) => apiFetch<ExportFormat[]>(`/stories/${id}/bgm/exports`),
+  requestBgmExport: (id: string, format: string) =>
+    apiFetch<{ format: string; ready: boolean; url: string | null; size_bytes: number | null }>(
+      `/stories/${id}/bgm/exports`,
+      { method: 'POST', body: JSON.stringify({ format }) },
+    ),
   regenerate: (
     id: string,
     body: {

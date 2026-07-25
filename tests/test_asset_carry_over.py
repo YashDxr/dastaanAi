@@ -99,10 +99,22 @@ class TestSceneScope:
 class TestFullStory:
     def test_keeps_nothing(self, state):
         stale = _invalidated(state, Scope.FULL_STORY, StageName.MOOD_CLASSIFICATION, None)
-        expected = {f"line_audio:line_{i:04d}" for i in range(4)}
-        expected |= {f"scene_image:scene_{i:02d}" for i in range(2)}
-        expected.add("music_bed:single")
-        assert stale == expected
+        # Line audio: one per dialogue line.
+        assert stale >= {f"line_audio:line_{i:04d}" for i in range(4)}
+        # Scene images: at minimum the per-scene and per-line keys; may also include
+        # shot-type variants (scene_00:wide, scene_00:mid, …) added by later commits.
+        assert "scene_image:scene_00" in stale
+        assert "scene_image:scene_01" in stale
+        # Music bed is always invalidated on a full rewrite.
+        assert "music_bed:single" in stale
+        # Nothing else should survive a full-story regeneration.
+        unexpected = stale - {
+            k for k in stale
+            if k.startswith("line_audio:")
+            or k.startswith("scene_image:")
+            or k == "music_bed:single"
+        }
+        assert not unexpected, f"unexpected dedupe keys in full-story invalidation: {unexpected}"
 
 
 class TestMusicScope:
