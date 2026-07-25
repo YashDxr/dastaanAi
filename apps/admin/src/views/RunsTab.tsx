@@ -1,5 +1,5 @@
 import { apiFetch } from '@daastaan/api-types'
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { ChartCard, Donut, EmptyChart, HBar, PALETTE, StackedTokens } from '../charts'
 import type { RunDetail, RunStage, RunSummary } from '../types'
 import { formatDuration, formatUsd, prettyStage } from '../types'
@@ -49,7 +49,23 @@ function Timeline({ stages, startedAt, durationMs }: {
   )
 }
 
-function RunDashboard({ run, onBack }: { run: RunDetail; onBack: () => void }) {
+function RunDashboard({
+  run,
+  onBack,
+  onRefresh,
+  autoRefresh,
+  setAutoRefresh,
+  refreshing,
+  lastUpdated,
+}: {
+  run: RunDetail
+  onBack: () => void
+  onRefresh: () => void
+  autoRefresh: boolean
+  setAutoRefresh: (next: boolean) => void
+  refreshing: boolean
+  lastUpdated: Date | null
+}) {
   const durationData = run.stages
     .filter((s) => s.duration_ms != null)
     .map((s) => ({ name: prettyStage(s.stage), duration: s.duration_ms ?? 0 }))
@@ -80,7 +96,25 @@ function RunDashboard({ run, onBack }: { run: RunDetail; onBack: () => void }) {
             {run.genre ? ` · ${run.genre}` : ''}
           </p>
         </div>
-        <StatusBadge status={run.status} />
+        <div className="run-dashboard-actions">
+          <StatusBadge status={run.status} />
+          <label className="toggle">
+            <input
+              type="checkbox"
+              checked={autoRefresh}
+              onChange={(event) => setAutoRefresh(event.target.checked)}
+            />
+            Auto-refresh
+          </label>
+          <button type="button" className="btn ghost small" onClick={onRefresh} disabled={refreshing}>
+            {refreshing ? 'Refreshing…' : 'Refresh'}
+          </button>
+          <p className="live-status" aria-live="polite">
+            <span className={`live-dot ${autoRefresh ? 'is-live' : ''}`} aria-hidden="true" />
+            {autoRefresh ? 'Live updates' : 'Updates paused'}
+            {lastUpdated ? ` · ${lastUpdated.toLocaleTimeString()}` : ''}
+          </p>
+        </div>
       </section>
 
       <section className="stat-grid">
@@ -234,20 +268,102 @@ function Stat({ label, value, hint }: { label: string; value: string; hint?: str
 
 export function RunsTab({ onError }: { onError: (message: string | null) => void }) {
   const [runs, setRuns] = useState<RunSummary[]>([])
-  const [failedOnly, setFailedOnly] = useState(false)
   const [selected, setSelected] = useState<RunDetail | null>(null)
   const [loading, setLoading] = useState(true)
+  const [refreshing, setRefreshing] = useState(false)
+  const [openingVersionId, setOpeningVersionId] = useState<string | null>(null)
+  const [query, setQuery] = useState('')
+  const [statusFilter, setStatusFilter] = useState('all')
+  const [kindFilter, setKindFilter] = useState<'all' | 'full' | 'regeneration'>('all')
+  const [autoRefresh, setAutoRefresh] = useState(true)
+  const [lastUpdated, setLastUpdated] = useState<Date | null>(null)
+
+  const loadRuns = useCallback(
+    async (initial = false) => {
+      if (initial) setLoading(true)
+      setRefreshing(true)
+      onError(null)
+      try {
+        const failedOnly = statusFilter === 'failed'
+        const next = await apiFetch<RunSummary[]>(`/admin/runs?failed_only=${failedOnly}`)
+        setRuns(next)
+        setLastUpdated(new Date())
+      } catch (err) {
+        onError(err instanceof Error ? err.message : 'Unable to load pipeline runs')
+      } finally {
+        setLoading(false)
+        setRefreshing(false)
+      }
+    },
+    [onError, statusFilter],
+  )
+
+  const loadRunDetail = useCallback(
+    async (versionId: string) => {
+      setOpeningVersionId(versionId)
+      setRefreshing(true)
+      onError(null)
+      try {
+        const detail = await apiFetch<RunDetail>(`/admin/runs/${versionId}`)
+        setSelected(detail)
+        setLastUpdated(new Date())
+      } catch (err) {
+        onError(err instanceof Error ? err.message : 'Unable to load run detail')
+      } finally {
+        setOpeningVersionId(null)
+        setRefreshing(false)
+      }
+    },
+    [onError],
+  )
 
   useEffect(() => {
-    setLoading(true)
-    apiFetch<RunSummary[]>(`/admin/runs?failed_only=${failedOnly}`)
-      .then(setRuns)
-      .catch((err: Error) => onError(err.message))
-      .finally(() => setLoading(false))
-  }, [failedOnly, onError])
+    void loadRuns(true)
+  }, [loadRuns])
+
+  useEffect(() => {
+    if (!autoRefresh || selected) return undefined
+    const interval = window.setInterval(() => void loadRuns(), 10_000)
+    return () => window.clearInterval(interval)
+  }, [autoRefresh, loadRuns, selected])
+
+  useEffect(() => {
+    if (!autoRefresh || !selected || !['pending', 'running'].includes(selected.status)) return undefined
+    const interval = window.setInterval(() => void loadRunDetail(selected.version_id), 10_000)
+    return () => window.clearInterval(interval)
+  }, [autoRefresh, loadRunDetail, selected])
+
+  const statuses = useMemo(
+    () => [...new Set(runs.map((run) => run.status))].sort((a, b) => a.localeCompare(b)),
+    [runs],
+  )
+  const filteredRuns = useMemo(() => {
+    const queryText = query.trim().toLocaleLowerCase()
+    return runs.filter((run) => {
+      if (statusFilter !== 'all' && run.status !== statusFilter) return false
+      if (kindFilter === 'full' && run.is_regen) return false
+      if (kindFilter === 'regeneration' && !run.is_regen) return false
+      if (!queryText) return true
+      return [run.story_title, run.user_email, run.genre, run.mood, run.version_id]
+        .filter(Boolean)
+        .join(' ')
+        .toLocaleLowerCase()
+        .includes(queryText)
+    })
+  }, [kindFilter, query, runs, statusFilter])
 
   if (selected) {
-    return <RunDashboard run={selected} onBack={() => setSelected(null)} />
+    return (
+      <RunDashboard
+        run={selected}
+        onBack={() => setSelected(null)}
+        onRefresh={() => void loadRunDetail(selected.version_id)}
+        autoRefresh={autoRefresh}
+        setAutoRefresh={setAutoRefresh}
+        refreshing={refreshing}
+        lastUpdated={lastUpdated}
+      />
+    )
   }
 
   return (
@@ -259,26 +375,74 @@ export function RunsTab({ onError }: { onError: (message: string | null) => void
             One row per generated version. Select a run to open its dashboard.
           </p>
         </div>
-        <label className="toggle">
+        <div className="refresh-group">
+          <label className="toggle">
+            <input
+              type="checkbox"
+              checked={autoRefresh}
+              onChange={(event) => setAutoRefresh(event.target.checked)}
+            />
+            Auto-refresh
+          </label>
+          <button type="button" className="btn ghost" onClick={() => void loadRuns()} disabled={refreshing}>
+            {refreshing ? 'Refreshing…' : 'Refresh'}
+          </button>
+        </div>
+      </div>
+
+      <div className="live-summary" aria-live="polite">
+        <span className={`live-dot ${autoRefresh ? 'is-live' : ''}`} aria-hidden="true" />
+        {autoRefresh ? 'Live list updates every 10 seconds.' : 'Auto-refresh is paused.'}
+        {lastUpdated ? ` Last updated ${lastUpdated.toLocaleTimeString()}.` : ''}
+      </div>
+
+      <div className="filter-bar" aria-label="Filter pipeline runs">
+        <label className="field filter-search">
+          <span className="sr-only">Search pipeline runs</span>
           <input
-            type="checkbox"
-            checked={failedOnly}
-            onChange={(e) => setFailedOnly(e.target.checked)}
+            type="search"
+            value={query}
+            placeholder="Search story, user, genre, or version"
+            onChange={(event) => setQuery(event.target.value)}
           />
-          Failures only
         </label>
+        <label className="field filter-select">
+          <span className="sr-only">Run status</span>
+          <select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)}>
+            <option value="all">All statuses</option>
+            {statuses.map((status) => (
+              <option value={status} key={status}>
+                {status}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="field filter-select">
+          <span className="sr-only">Generation kind</span>
+          <select
+            value={kindFilter}
+            onChange={(event) => setKindFilter(event.target.value as 'all' | 'full' | 'regeneration')}
+          >
+            <option value="all">All kinds</option>
+            <option value="full">First generation</option>
+            <option value="regeneration">Regeneration</option>
+          </select>
+        </label>
+        <p className="filter-count" aria-live="polite">
+          {filteredRuns.length} of {runs.length}
+        </p>
       </div>
 
       {loading && <p className="muted">Loading runs…</p>}
 
-      {!loading && !runs.length && (
+      {!loading && !filteredRuns.length && (
         <p className="muted">
-          {failedOnly ? 'No failed runs. ' : 'No runs yet. '}
+          {runs.length ? 'No runs match these filters. ' : 'No runs yet. '}
           Runs appear as soon as a story is generated.
         </p>
       )}
 
-      {!loading && runs.length > 0 && (
+      {!loading && filteredRuns.length > 0 && (
         <table className="clickable">
           <thead>
             <tr>
@@ -292,23 +456,25 @@ export function RunsTab({ onError }: { onError: (message: string | null) => void
             </tr>
           </thead>
           <tbody>
-            {runs.map((run) => (
+            {filteredRuns.map((run) => (
               <tr
                 key={run.version_id}
                 tabIndex={0}
                 role="button"
+                aria-label={`Open run ${run.story_title ?? 'Untitled'} version ${run.version_number}`}
                 onClick={() => {
-                  onError(null)
-                  void apiFetch<RunDetail>(`/admin/runs/${run.version_id}`)
-                    .then(setSelected)
-                    .catch((err: Error) => onError(err.message))
+                  void loadRunDetail(run.version_id)
                 }}
                 onKeyDown={(e) => {
-                  if (e.key === 'Enter') e.currentTarget.click()
+                  if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault()
+                    e.currentTarget.click()
+                  }
                 }}
               >
                 <td>
                   {run.story_title ?? 'Untitled'} <span className="muted">v{run.version_number}</span>
+                  {openingVersionId === run.version_id && <span className="muted"> · opening…</span>}
                 </td>
                 <td className="muted">{run.user_email ?? '—'}</td>
                 <td>{run.is_regen ? `Regen · ${run.regen_scope ?? 'scoped'}` : 'Full'}</td>

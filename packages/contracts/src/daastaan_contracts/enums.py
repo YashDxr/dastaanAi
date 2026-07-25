@@ -58,6 +58,30 @@ class StoryStatus(StrEnum):
     FLAGGED = "flagged"
 
 
+class ReviewStatus(StrEnum):
+    """Editorial state, deliberately separate from the generation lifecycle.
+
+    A story can be technically ``ready`` while an operator still needs changes
+    before it is released. Keeping that decision out of :class:`StoryStatus`
+    makes the review queue reversible without confusing workers about whether a
+    pipeline run succeeded.
+    """
+
+    PENDING = "pending"
+    APPROVED = "approved"
+    FLAGGED = "flagged"
+    CHANGES_REQUESTED = "changes_requested"
+
+
+class ReviewAction(StrEnum):
+    """The small, explicit review transition surface available to admins."""
+
+    APPROVE = "approve"
+    FLAG = "flag"
+    CHANGES_REQUESTED = "changes_requested"
+    CLEAR_FLAG = "clear_flag"
+
+
 class UserRole(StrEnum):
     USER = "user"
     ADMIN = "admin"
