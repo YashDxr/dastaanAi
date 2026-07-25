@@ -1,103 +1,44 @@
-import { apiFetch, ApiError } from '@daastaan/api-types'
 import { useEffect, useState } from 'react'
+import { ApiError } from '@daastaan/api-types'
+import { AppShell } from './components/app-shell'
+import { CharacterCard } from './components/character-card'
+import { EpisodeCard } from './components/episode-card'
+import { PersonaCard } from './components/persona-card'
+import { PipelineGraph } from './components/pipeline-graph'
+import { PlayerControls } from './components/player-controls'
+import { WaveformSpine } from './components/waveform-spine'
+import { getCurrentUser, login, signup, type AuthUser } from './services/auth'
+import { listStories, type ApiStory } from './services/stories'
+import { createStory, getCharacterVoices, getEpisodePlayer, getNarratorPersonas, getObservability, getProcessingStatus, getSettings, getStoryDetail, getStoryUnderstanding, personas, saveSettings, updateCharacterVoice, type Character, type ProcessingStatus } from './services/studio'
 import './App.css'
 
-type User = { id: string; email: string; role: string }
-type Story = { id: string; title: string | null; status: string; current_version_id: string | null }
-
-/**
- * Starting shell for the listener-facing app.
- *
- * Deliberately minimal: it proves the auth cookie round-trip and the story list
- * work end to end, which is the piece that is annoying to debug later. The
- * studio view, progress stepper, and player build on top of this.
- */
-export default function App() {
-  const [user, setUser] = useState<User | null>(null)
-  const [stories, setStories] = useState<Story[]>([])
-  const [error, setError] = useState<string | null>(null)
-  const [loading, setLoading] = useState(true)
-
-  useEffect(() => {
-    apiFetch<User>('/auth/me')
-      .then(setUser)
-      .catch(() => setUser(null))
-      .finally(() => setLoading(false))
-  }, [])
-
-  useEffect(() => {
-    if (!user) return
-    apiFetch<Story[]>('/stories')
-      .then(setStories)
-      .catch((err: ApiError) => setError(err.detail))
-  }, [user])
-
-  async function handleAuth(event: React.FormEvent<HTMLFormElement>, path: '/auth/login' | '/auth/signup') {
-    event.preventDefault()
-    setError(null)
-    const form = new FormData(event.currentTarget)
-    try {
-      const me = await apiFetch<User>(path, {
-        method: 'POST',
-        body: JSON.stringify({ email: form.get('email'), password: form.get('password') }),
-      })
-      setUser(me)
-    } catch (err) {
-      setError(err instanceof ApiError ? err.detail : 'something went wrong')
-    }
-  }
-
-  if (loading) return <main className="shell">Loading…</main>
-
-  if (!user) {
-    return (
-      <main className="shell">
-        <h1>Daastaan</h1>
-        <p className="tagline">Turn a dream into an audio drama.</p>
-        <form onSubmit={(e) => handleAuth(e, '/auth/login')}>
-          <input name="email" type="email" placeholder="you@example.com" required />
-          <input name="password" type="password" placeholder="password" minLength={8} required />
-          <div className="row">
-            <button type="submit">Log in</button>
-            <button type="button" onClick={(e) => handleAuth(e as never, '/auth/signup')}>
-              Sign up
-            </button>
-          </div>
-        </form>
-        {error && <p className="error">{error}</p>}
-      </main>
-    )
-  }
-
-  return (
-    <main className="shell">
-      <header className="row">
-        <h1>Daastaan</h1>
-        <button
-          onClick={async () => {
-            await apiFetch('/auth/logout', { method: 'POST' })
-            setUser(null)
-          }}
-        >
-          Log out
-        </button>
-      </header>
-      <p className="tagline">Signed in as {user.email}</p>
-
-      <h2>Your stories</h2>
-      {stories.length === 0 ? (
-        <p>No stories yet. Paste a dream to get started.</p>
-      ) : (
-        <ul className="stories">
-          {stories.map((story) => (
-            <li key={story.id}>
-              <strong>{story.title ?? 'Untitled'}</strong>
-              <span className={`badge ${story.status}`}>{story.status}</span>
-            </li>
-          ))}
-        </ul>
-      )}
-      {error && <p className="error">{error}</p>}
-    </main>
-  )
+function usePath() { const [path, setPath] = useState(window.location.pathname); useEffect(() => { const onPop = () => setPath(window.location.pathname); window.addEventListener('popstate', onPop); return () => window.removeEventListener('popstate', onPop) }, []); return { path, go: (to: string) => { history.pushState({}, '', to); setPath(to); window.scrollTo(0, 0) } } }
+function formatDuration(seconds: number) { return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}` }
+function useLoad<T>(load: () => Promise<T>, deps: string[]) { const [data, setData] = useState<T | null>(null); useEffect(() => { let live = true; load().then((value) => live && setData(value)); return () => { live = false } }, deps); return data }
+function Status({ children }: { children: React.ReactNode }) { return <span className="status"><i />{children}</span> }
+function Landing({ go }: { go: (to: string) => void }) { return <div className="landing"><header><button className="wordmark" onClick={() => go('/')}><i>⌁</i> Daastaan<sup>AI</sup></button><button className="button ghost" onClick={() => go('/dashboard')}>Open studio ↗</button></header><section className="hero"><p className="eyebrow">A creative storytelling studio</p><h1>Stories deserve<br/><i>more than a voice.</i></h1><p>Turn a script into a cinematic audio world—narration, character performances, score, and all.</p><div><button className="button" onClick={() => go('/upload')}>Begin a story →</button><button className="text-button" onClick={() => go('/story/st_1/player')}>▶ Listen to a demo</button></div><article className="hero-player"><small>NOW PLAYING · ORIGINAL DEMO</small><h2>The Cartographer's Daughter</h2><p>Same scene. Three entirely different worlds.</p><WaveformSpine bars={100} seed={11} active color="var(--ember)" /><span>00:24 <b /> 01:08</span></article></section><section className="landing-light"><p className="eyebrow">Stories, understood</p><h2>Every pause holds a meaning.</h2><div>{[['01','Read beneath the words'],['02','Cast every character'],['03','Compose the atmosphere']].map(([n, title]) => <article key={n}><small>{n}</small><h3>{title}</h3><p>Designed around scene, emotion, pacing, and the space between two lines.</p></article>)}</div></section></div> }
+function Dashboard({ path, go, stories }: { path: string; go: (to: string) => void; stories: ApiStory[] }) { const featured = useLoad(() => getStoryDetail('st_2'), []); return <AppShell path={path} go={go} title="Good evening." subtitle="The director's room" actions={<button className="button" onClick={() => go('/upload')}>＋ New story</button>}>{featured && <section className="continue"><div><Status>In the studio</Status><h2>{featured.title}</h2><p>Your episode is finding its rhythm.</p><div className="progress"><i style={{ width: '62%' }} /></div><small>62% · 6 of 9 movements complete</small></div><div><WaveformSpine bars={48} active color="var(--signal)" /><button className="button ghost" onClick={() => go(`/processing/${featured.id}`)}>Follow along →</button></div></section>}<div className="section-title"><div><p className="eyebrow">Recent work</p><h2>On your shelf</h2></div><button className="text-button" onClick={() => go('/library')}>View library →</button></div><section className="empty-real"><b>Live story index</b><p>{stories.length ? `${stories.length} stories returned by GET /stories` : 'No live stories yet.'}</p></section></AppShell> }
+function Upload({ path, go }: { path: string; go: (to: string) => void }) { const [text, setText] = useState('The door was already open when she got home. She had not left it that way.'); const [persona, setPersona] = useState('romance'); const [busy, setBusy] = useState(false); return <AppShell path={path} go={go} title="Bring in a story." subtitle="Create an episode"><section className="two-col"><div className="panel composer"><label>Paste your story<textarea value={text} onChange={(e) => setText(e.target.value)} /></label><small>{text.length} characters · 0:18 estimated</small></div><aside className="panel form-panel"><label>Genre<select><option>Literary Fiction</option><option>Thriller</option><option>Fable</option></select></label><label>Language<select><option>English</option><option>Urdu</option></select></label><p className="eyebrow">Narrator persona</p><div className="persona-picks">{personas.map((p) => <PersonaCard key={p.id} persona={p} selected={persona === p.id} onSelect={() => setPersona(p.id)} />)}</div><button disabled={busy} className="button" onClick={() => { setBusy(true); createStory({ text, genre: 'Literary Fiction', persona, language: 'English' }).then((story) => go(`/processing/${story.id}`)) }}>{busy ? 'Setting the stage…' : 'Generate episode →'}</button></aside></section></AppShell> }
+function Processing({ path, go, id }: { path: string; go: (to: string) => void; id: string }) { const status = useLoad(() => getProcessingStatus(id), [id]); return <AppShell path={path} go={go} title="Your story is taking shape." subtitle="Live processing">{status ? <ProcessingView status={status} go={go} /> : <WaveformSpine active />}</AppShell> }
+function ProcessingView({ status, go }: { status: ProcessingStatus; go: (to: string) => void }) { return <><PipelineGraph status={status.nodes} /><section className="process-details"><div className="panel"><p className="eyebrow">Progress</p><h2>{status.progress}% complete</h2><div className="progress"><i style={{ width: `${status.progress}%` }} /></div><small>Estimated {Math.ceil(status.estimatedSeconds / 60)} minutes remaining</small></div><div className="panel logs"><p className="eyebrow">Live direction</p>{status.logs.map((log) => <p key={log.msg}><b>{log.node}</b> {log.msg}</p>)}<button className="text-button" onClick={() => go(`/story/${status.storyId}/player`)}>Preview episode →</button></div></section></> }
+function StoryShell({ path, go, id, page }: { path: string; go: (to: string) => void; id: string; page: 'understanding' | 'personas' | 'voices' | 'player' }) { const story = useLoad(() => getStoryDetail(id), [id]); if (!story) return <AppShell path={path} go={go}><WaveformSpine active /></AppShell>; return <AppShell path={path} go={go} title={story.title} subtitle={`${story.genre} · ${formatDuration(story.duration)}`}><nav className="story-tabs">{(['player','understanding','personas','voices'] as const).map((tab) => <button key={tab} className={page === tab ? 'active' : ''} onClick={() => go(`/story/${id}/${tab}`)}>{tab}</button>)}</nav>{page === 'understanding' && <Understanding id={id} go={go} />}{page === 'personas' && <Personas id={id} />}{page === 'voices' && <Voices id={id} />}{page === 'player' && <Player id={id} />}</AppShell> }
+function Understanding({ id, go }: { id: string; go: (to: string) => void }) { const story = useLoad(() => getStoryUnderstanding(id), [id]); if (!story) return null; return <section className="insights"><div className="panel"><p className="eyebrow">Scene timeline</p>{story.scenes.map((scene) => <div className="scene" key={scene.id}><b>{scene.title}</b><small>{scene.emotion} · {formatDuration(scene.start)}</small></div>)}</div><div className="panel"><p className="eyebrow">The cast</p>{story.characters.map((character) => <CharacterCard key={character.id} character={character} onSelect={() => go(`/story/${id}/voices`)} />)}</div></section> }
+function Personas({ id }: { id: string }) { const data = useLoad(() => getNarratorPersonas(id), [id]); const [selected, setSelected] = useState('romance'); return <section><p className="eyebrow">A/B compare</p><h2>One story. Many ways to tell it.</h2><div className="cards">{data?.map((persona) => <PersonaCard key={persona.id} persona={persona} selected={selected === persona.id} onSelect={() => setSelected(persona.id)} />)}</div></section> }
+function Voices({ id }: { id: string }) { const data = useLoad(() => getCharacterVoices(id), [id]); const [active, setActive] = useState<Character | null>(null); useEffect(() => { if (data && !active) setActive(data[0]) }, [data, active]); if (!active) return null; return <section className="two-col"><div className="panel"><p className="eyebrow">Character voice studio</p><h2>{active.name}</h2><WaveformSpine active bars={64} color={active.color} /><label>Pitch<input type="range" value={active.pitch + 12} onChange={(e) => setActive({ ...active, pitch: Number(e.target.value) - 12 })} /></label><label>Speed<input type="range" min=".5" max="1.5" step=".05" value={active.speed} onChange={(e) => setActive({ ...active, speed: Number(e.target.value) })} /></label><button className="button" onClick={() => updateCharacterVoice(id, { characterId: active.id, pitch: active.pitch, speed: active.speed, energy: active.energy })}>Apply direction →</button></div><div className="panel">{data?.map((character) => <CharacterCard key={character.id} character={character} onSelect={() => setActive(character)} />)}</div></section> }
+function Player({ id }: { id: string }) { const story = useLoad(() => getEpisodePlayer(id), [id]); const [progress, setProgress] = useState(.22); const [playing, setPlaying] = useState(false); if (!story) return null; return <section className="player-layout"><div className="panel player"><div className="cover" style={{ background: story.cover }} /><small>NOW PLAYING · SCENE 02</small><h2>Letters in the Attic</h2><WaveformSpine active={playing} progress={progress} onSeek={setProgress} color="var(--ember)" /><PlayerControls playing={playing} onToggle={() => setPlaying(!playing)} /></div><aside className="panel transcript"><p className="eyebrow">Transcript</p>{story.transcript.map((line) => <p key={line.t}>{line.text}</p>)}</aside></section> }
+function Library({ path, go, stories }: { path: string; go: (to: string) => void; stories: ApiStory[] }) { return <AppShell path={path} go={go} title="The library" subtitle="Your listening room"><section className="panel"><p className="eyebrow">Live stories</p>{stories.length ? stories.map((story) => <button className="live-row" key={story.id} onClick={() => go(`/story/${story.id}/player`)}><b>{story.title ?? 'Untitled'}</b><Status>{story.status}</Status></button>) : <p>No stories returned by the live API.</p>}</section><p className="eyebrow section-label">Design preview</p><div className="cards">{['st_1','st_2','st_3'].map((id) => <MockCard key={id} id={id} go={go} />)}</div></AppShell> }
+function MockCard({ id, go }: { id: string; go: (to: string) => void }) { const story = useLoad(() => getStoryDetail(id), [id]); return story ? <EpisodeCard story={story} go={go} /> : null }
+function Observability({ path, go }: { path: string; go: (to: string) => void }) { const data = useLoad(getObservability, []); return <AppShell path={path} go={go} title="Observability" subtitle="Production room">{data && <><div className="metric-row">{[['Active jobs',data.activeJobs],['Median render',data.latency],['Failure rate',data.failureRate]].map(([label,value]) => <article className="panel" key={String(label)}><small>{label}</small><h2>{value}</h2></article>)}</div><section className="panel logs"><p className="eyebrow">Execution trace</p>{data.logs.map((log) => <p key={log}>{log}</p>)}</section></>}</AppShell> }
+function Settings({ path, go }: { path: string; go: (to: string) => void }) { const data = useLoad(getSettings, []); const [saved, setSaved] = useState(false); return <AppShell path={path} go={go} title="Settings" subtitle="Your studio">{data && <section className="panel settings"><label>Default narrator<select defaultValue={data.narrator}>{personas.map((persona) => <option key={persona.id} value={persona.id}>{persona.name}</option>)}</select></label><label>Language<select defaultValue={data.language}><option>English</option><option>Urdu</option></select></label><label>Audio quality<select defaultValue={data.audioQuality}><option>Studio · 48kHz</option><option>Standard · 44.1kHz</option></select></label><button className="button" onClick={() => saveSettings(data).then(() => setSaved(true))}>{saved ? 'Saved ✓' : 'Save changes'}</button></section>}</AppShell> }
+function Login({ onUser }: { onUser: (user: AuthUser) => void }) {
+  const demo = { email: 'demo@daastaan.ai', password: 'daastaan-demo' }
+  const [email, setEmail] = useState('')
+  const [password, setPassword] = useState('')
+  const [error, setError] = useState('')
+  const [busy, setBusy] = useState(false)
+  const submit = (event: React.FormEvent<HTMLFormElement>) => { event.preventDefault(); setBusy(true); setError(''); login(email, password).then(onUser).catch((e: ApiError) => setError(e.detail)).finally(() => setBusy(false)) }
+  const useDemo = async () => { setEmail(demo.email); setPassword(demo.password); setBusy(true); setError(''); try { await signup(demo.email, demo.password); onUser(await login(demo.email, demo.password)) } catch { login(demo.email, demo.password).then(onUser).catch((e: ApiError) => setError(e.detail)).finally(() => setBusy(false)); return } setBusy(false) }
+  const copy = (value: string) => navigator.clipboard?.writeText(value)
+  return <main className="auth"><div><p className="eyebrow">Daastaan AI</p><h1>Enter the<br/><i>story room.</i></h1><form onSubmit={submit}><input name="email" value={email} onChange={(e) => setEmail(e.target.value)} type="email" placeholder="you@example.com" required /><input name="password" value={password} onChange={(e) => setPassword(e.target.value)} type="password" placeholder="Password" required minLength={8} /><button disabled={busy} className="button">{busy ? 'Entering…' : 'Log in →'}</button><button type="button" className="text-button" onClick={() => signup(email, password).then(onUser).catch((e: ApiError) => setError(e.detail))}>Create an account</button></form><section className="demo-creds"><p className="eyebrow">Demo access</p><p>Copy these credentials or let us fill them in for you.</p><div><span><b>Email</b><code>{demo.email}</code><button onClick={() => copy(demo.email)}>Copy</button></span><span><b>Password</b><code>{demo.password}</code><button onClick={() => copy(demo.password)}>Copy</button></span></div><button className="button ghost" disabled={busy} onClick={useDemo}>Use demo credentials →</button></section>{error && <p className="error">{error}</p>}</div><WaveformSpine active bars={80} color="var(--ember)" /></main>
 }
+export default function App() { const { path, go } = usePath(); const [user, setUser] = useState<AuthUser | null>(null); const [checked, setChecked] = useState(false); const [stories, setStories] = useState<ApiStory[]>([]); useEffect(() => { getCurrentUser().then(setUser).catch(() => setUser(null)).finally(() => setChecked(true)) }, []); useEffect(() => { if (user) listStories().then(setStories).catch(() => setStories([])) }, [user]); if (!checked) return <main className="loading"><WaveformSpine active /></main>; if (!user) return <Login onUser={setUser} />; if (path === '/') return <Landing go={go} />; if (path === '/dashboard') return <Dashboard path={path} go={go} stories={stories} />; if (path === '/upload') return <Upload path={path} go={go} />; if (path === '/library') return <Library path={path} go={go} stories={stories} />; if (path === '/observability') return <Observability path={path} go={go} />; if (path === '/settings') return <Settings path={path} go={go} />; const processing = path.match(/^\/processing\/([^/]+)/); if (processing) return <Processing path={path} go={go} id={processing[1]} />; const story = path.match(/^\/story\/([^/]+)(?:\/(player|understanding|personas|voices))?\/?$/); if (story) return <StoryShell path={path} go={go} id={story[1]} page={(story[2] as 'player' | 'understanding' | 'personas' | 'voices') ?? 'player'} />; return <AppShell path={path} go={go} title="Page not found"><button className="button" onClick={() => go('/dashboard')}>Return to studio</button></AppShell> }

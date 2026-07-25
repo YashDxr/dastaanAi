@@ -1,0 +1,2 @@
+import type { Character } from '../services/studio'
+export function CharacterCard({ character, onSelect }: { character: Character; onSelect?: () => void }) { return <button className="character-card" onClick={onSelect}><span style={{ background: character.color }}>{character.name.slice(0, 1)}</span><div><strong>{character.name}</strong><small>{character.role} · {character.lines} lines</small><em>{character.voice}</em></div><b>→</b></button> }

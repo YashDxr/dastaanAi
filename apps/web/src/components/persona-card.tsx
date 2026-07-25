@@ -1,0 +1,3 @@
+import type { Persona } from '../services/studio'
+import { WaveformSpine } from './waveform-spine'
+export function PersonaCard({ persona, selected, onSelect }: { persona: Persona; selected?: boolean; onSelect?: () => void }) { return <button className={`persona-card ${selected ? 'selected' : ''}`} onClick={onSelect}><span className="persona-dot" style={{ background: persona.color }} /><small>{persona.vibe}</small><strong>{persona.name}</strong><p>{persona.description}</p><WaveformSpine bars={32} seed={persona.name.length} height={28} color={persona.color} active={selected} /><em>▶ Preview</em></button> }
