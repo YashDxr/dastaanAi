@@ -63,6 +63,15 @@ export const stories = {
     }),
 }
 
+export const mysteries = {
+  create: (body: Record<string, unknown>) => apiFetch<DispatchAccepted>('/mysteries', { method: 'POST', body: JSON.stringify(body) }),
+  get: (id: string) => apiFetch<{ status: string; message: string; case: any }>(`/mysteries/${id}`),
+  discover: (id: string, clueId: string) => apiFetch<{ case: any }>(`/mysteries/${id}/clues/${clueId}/discover`, { method: 'POST' }),
+  interrogate: (id: string, suspect_id: string, question: string) => apiFetch<{ case: any }>(`/mysteries/${id}/interrogate`, { method: 'POST', body: JSON.stringify({ suspect_id, question }) }),
+  accuse: (id: string, suspect_id: string) => apiFetch<{ status: string; message: string; case: any }>(`/mysteries/${id}/accuse`, { method: 'POST', body: JSON.stringify({ suspect_id }) }),
+  reveal: (id: string) => apiFetch<{ case: any }>(`/mysteries/${id}/reveal`, { method: 'POST' }),
+}
+
 /** How often to re-read `/jobs` when the event stream is unavailable. Slower
  *  than the old unconditional 2s poll because it is now genuinely a fallback. */
 const FALLBACK_POLL_MS = 5000

@@ -32,6 +32,8 @@ from .models import (
     StoryUnderstandingOutput,
     ValidatedDirective,
     VoiceAssignment,
+    MysteryCaseOutput,
+    MysteryInterrogationOutput,
 )
 from .stages import (
     AGENT_STAGES,
@@ -78,6 +80,8 @@ __all__ = [
     "UserRole",
     "ValidatedDirective",
     "VoiceAssignment",
+    "MysteryCaseOutput",
+    "MysteryInterrogationOutput",
     "downstream_from",
     "is_fanout",
     "is_valid_entry",

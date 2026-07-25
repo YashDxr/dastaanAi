@@ -148,6 +148,8 @@ export type View =
   | { name: 'library' }
   | { name: 'compose' }
   | { name: 'studio'; storyId: string }
+  | { name: 'mystery-compose' }
+  | { name: 'mystery'; storyId: string }
 
 export const STAGE_LABELS: Record<string, string> = {
   mood_classification: 'Mood',

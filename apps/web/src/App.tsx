@@ -4,6 +4,7 @@ import { Landing } from './views/Landing'
 import { Library } from './views/Library'
 import { Compose } from './views/Compose'
 import { Studio } from './views/Studio'
+import { Mystery, MysteryCompose } from './views/Mystery'
 import type { Story, User, View } from './types'
 import './App.css'
 
@@ -99,6 +100,10 @@ export default function App() {
     )
   }
 
+  if (view.name === 'mystery-compose') return <MysteryCompose user={user} onLogout={() => void handleLogout()} onHome={() => setView({ name: 'library' })} onCreated={(storyId) => { void loadLibrary(); setView({ name: 'mystery', storyId }) }} />
+
+  if (view.name === 'mystery') return <Mystery user={user} storyId={view.storyId} onLogout={() => void handleLogout()} onHome={() => { void loadLibrary(); setView({ name: 'library' }) }} onCompose={() => setView({ name: 'mystery-compose' })} />
+
   return (
     <>
       {bootError && <p className="form-error">{bootError}</p>}
@@ -107,6 +112,7 @@ export default function App() {
         stories={stories}
         onLogout={() => void handleLogout()}
         onCompose={() => setView({ name: 'compose' })}
+        onMystery={() => setView({ name: 'mystery-compose' })}
         onOpen={(storyId) => setView({ name: 'studio', storyId })}
       />
     </>

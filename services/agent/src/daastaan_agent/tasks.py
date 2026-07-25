@@ -13,6 +13,7 @@ pipeline partway through.
 """
 
 import time
+from uuid import uuid4
 from typing import Any
 
 import redis as redis_lib
@@ -33,6 +34,8 @@ from daastaan_contracts import (
     language_name,
     limits,
     plan_stages,
+    MysteryCaseOutput,
+    MysteryInterrogationOutput,
 )
 from sqlmodel import select
 
@@ -70,6 +73,9 @@ RETRY_KWARGS = {
     ),
 }
 
+MYSTERY_SYSTEM = """Create a fair, playable murder mystery. Return only the requested JSON. There must be exactly one culprit whose name exactly matches one suspect. Every suspect needs an alibi and private secret. Give at least three independent fair clues, and make red herrings compatible with the solution. Do not include chain-of-thought."""
+INTERROGATION_SYSTEM = """You are roleplaying a murder-mystery suspect. Return only structured JSON. Never state the killer identity, solution, or any private secret unless the supplied allowed facts explicitly permit it. Answer in character, concise, and plausibly evasive where appropriate."""
+
 
 def _bypass_cache(state: StoryState) -> bool:
     """Whether this run must ignore the response cache.
@@ -89,6 +95,54 @@ def _mark_story(session: Any, story_id: str, status: StoryStatus) -> None:
         story.status = status
         session.add(story)
         session.commit()
+
+
+@celery_app.task(name=TaskName.GENERATE_MYSTERY.value, bind=True, **RETRY_KWARGS)
+def generate_mystery(self, story_id: str, version_id: str, user_id: str) -> str:
+    """Generate and persist the complete private case in the existing version state."""
+    with session_scope() as session:
+        state = repo.load_state(session, version_id)
+        job = repo.start_job(session, story_id=story_id, version_id=version_id, stage="mystery_generation")
+        try:
+            request = (state.mystery or {}).get("request", {})
+            gateway = ModelGateway(session, stage="mystery_generation", version_id=version_id, user_id=user_id)
+            result = gateway.structured(schema=MysteryCaseOutput, system=MYSTERY_SYSTEM, user_content=str(request), kind="reasoning")
+            if len(result.suspects) < 3 or result.culprit_name not in {s.name for s in result.suspects} or len(result.clues) < 3:
+                raise ValueError("generated mystery did not pass solvability validation")
+            suspects = [{"id": str(uuid4()), **s.model_dump(), "is_culprit": s.name == result.culprit_name} for s in result.suspects]
+            culprit = next(s for s in suspects if s["is_culprit"])
+            clues = [{"id": str(uuid4()), **c.model_dump()} for c in result.clues]
+            state.title = result.title
+            state.setting = result.setting
+            state.mystery = {
+                "id": str(uuid4()), "title": result.title, "premise": result.premise, "setting": result.setting,
+                "victim": result.victim, "difficulty": request.get("difficulty", "medium"), "suspects": suspects,
+                "culprit_id": culprit["id"], "culprit_motive": result.culprit_motive,
+                "crime_timeline": [x.model_dump() for x in result.crime_timeline], "clues": clues,
+                "red_herrings": result.red_herrings, "solution": result.solution, "reveal_scene": result.reveal_scene,
+                "initial_scene": result.initial_scene,
+            }
+            state.mystery_play = {"discovered_clue_ids": [], "interrogations": [], "accusations": [], "revealed": False}
+            repo.save_state(session, state); repo.finish_job(session, job, status=JobStatus.SUCCEEDED); _mark_story(session, story_id, StoryStatus.READY); repo.publish(story_id, {"type": "complete", "version_id": version_id})
+        except Exception as exc:
+            repo.finish_job(session, job, status=JobStatus.FAILED, error=str(exc)); _mark_story(session, story_id, StoryStatus.FAILED); raise
+    return version_id
+
+
+@celery_app.task(name=TaskName.INTERROGATE_MYSTERY.value, bind=True, **RETRY_KWARGS)
+def interrogate_mystery(self, version_id: str, user_id: str, suspect_id: str, question: str) -> str:
+    with session_scope() as session:
+        state = repo.load_state(session, version_id); case = state.mystery or {}; play = state.mystery_play or {}
+        suspect = next((s for s in case.get("suspects", []) if s["id"] == suspect_id), None)
+        if not suspect: raise LookupError("suspect not found")
+        discovered = [c for c in case.get("clues", []) if c["id"] in set(play.get("discovered_clue_ids", []))]
+        # Private secrets and culpability never enter the interrogation prompt.
+        # This makes redaction structural rather than relying on the model to obey.
+        allowed = {k: v for k, v in suspect.items() if k not in {"is_culprit", "motive", "secret"}}
+        result = ModelGateway(session, stage="mystery_interrogation", version_id=version_id, user_id=user_id).structured(schema=MysteryInterrogationOutput, system=INTERROGATION_SYSTEM, user_content=str({"suspect": allowed, "discovered_clues": discovered, "question": question}), kind="light")
+        play.setdefault("interrogations", []).append({"id": str(uuid4()), "suspect_id": suspect_id, "question": question, **result.model_dump()})
+        state.mystery_play = play; repo.save_state(session, state); repo.publish(state.story_id, {"type": "mystery_interrogation", "suspect_id": suspect_id})
+    return version_id
 
 
 # --- TTS concurrency semaphore -------------------------------------------
