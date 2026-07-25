@@ -24,7 +24,9 @@ from daastaan_contracts import (
     StageName,
     StoryState,
     StoryUnderstandingOutput,
+    VoiceAge,
     VoiceAssignment,
+    VoiceGender,
 )
 from daastaan_contracts.models import (
     CharacterOutput,
@@ -144,18 +146,24 @@ CANNED_CHARACTERS = CharacterRegistryOutput(
             role=CharacterRole.NARRATOR,
             personality="Warm, gentle storyteller.",
             sample_line="Once upon a time, in a garden forgotten by all...",
+            gender=VoiceGender.NEUTRAL,
+            age=VoiceAge.ELDER,
         ),
         CharacterOutput(
             name="Lily",
             role=CharacterRole.PROTAGONIST,
             personality="Curious and brave young girl.",
             sample_line="What's behind this door?",
+            gender=VoiceGender.FEMININE,
+            age=VoiceAge.CHILD,
         ),
         CharacterOutput(
             name="Rufus",
             role=CharacterRole.SUPPORTING,
             personality="Wise but mischievous talking fox.",
             sample_line="Ah, a visitor! How delightful.",
+            gender=VoiceGender.MASCULINE,
+            age=VoiceAge.ADULT,
         ),
     ],
 )
@@ -315,14 +323,17 @@ def state_after_dialogue() -> StoryState:
         Character(
             id="char_00", name="Narrator", role=CharacterRole.NARRATOR,
             personality="Warm storyteller.", sample_line="Once upon a time...",
+            gender=VoiceGender.NEUTRAL, age=VoiceAge.ELDER,
         ),
         Character(
             id="char_01", name="Lily", role=CharacterRole.PROTAGONIST,
             personality="Curious girl.", sample_line="What's behind this door?",
+            gender=VoiceGender.FEMININE, age=VoiceAge.CHILD,
         ),
         Character(
             id="char_02", name="Rufus", role=CharacterRole.SUPPORTING,
             personality="Wise fox.", sample_line="Ah, a visitor!",
+            gender=VoiceGender.MASCULINE, age=VoiceAge.ADULT,
         ),
     ]
     state.lines = [

@@ -46,11 +46,16 @@ export class ApiError extends Error {
  * backend, which keeps requests same-origin and means no CORS handling here.
  */
 export async function apiFetch<T>(path: string, init: RequestInit = {}): Promise<T> {
+  // FormData must set its own Content-Type: the boundary token is generated per
+  // body and is part of the header value, so overriding it makes the request
+  // unparseable on the server.
+  const isFormData = typeof FormData !== 'undefined' && init.body instanceof FormData
+
   const response = await fetch(`/api${path}`, {
     ...init,
     credentials: 'include',
     headers: {
-      'Content-Type': 'application/json',
+      ...(isFormData ? {} : { 'Content-Type': 'application/json' }),
       ...(init.headers ?? {}),
     },
   })

@@ -1,7 +1,9 @@
 import { ApiError, apiFetch, openProgressStream } from '@daastaan/api-types'
 import type {
   DispatchAccepted,
+  ExportFormat,
   FeedbackEntry,
+  Ingest,
   Progress,
   Story,
   StoryDetail,
@@ -48,6 +50,12 @@ export const stories = {
       body: JSON.stringify({ raw_text }),
     }),
   feedbackHistory: (id: string) => apiFetch<FeedbackEntry[]>(`/stories/${id}/feedback`),
+  exports: (id: string) => apiFetch<ExportFormat[]>(`/stories/${id}/exports`),
+  requestExport: (id: string, format: string) =>
+    apiFetch<{ format: string; ready: boolean; url: string | null; size_bytes: number | null }>(
+      `/stories/${id}/exports`,
+      { method: 'POST', body: JSON.stringify({ format }) },
+    ),
   regenerate: (
     id: string,
     body: {
@@ -61,6 +69,15 @@ export const stories = {
       method: 'POST',
       body: JSON.stringify(body),
     }),
+}
+
+export const ingest = {
+  upload: (file: File) => {
+    const body = new FormData()
+    body.append('file', file)
+    return apiFetch<{ ingest_id: string; filename: string }>('/ingest', { method: 'POST', body })
+  },
+  get: (id: string) => apiFetch<Ingest>(`/ingest/${id}`),
 }
 
 /** How often to re-read `/jobs` when the event stream is unavailable. Slower

@@ -15,7 +15,18 @@ from fastapi import FastAPI, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from .routers import admin, auth, feedback, health, media, progress, stories, studio
+from .routers import (
+    admin,
+    auth,
+    exports,
+    feedback,
+    health,
+    ingest,
+    media,
+    progress,
+    stories,
+    studio,
+)
 
 log = structlog.get_logger(__name__)
 
@@ -47,7 +58,14 @@ app.add_middleware(
     allow_headers=["*", REQUEST_ID_HEADER],
     # A media element only treats a response as seekable when it can read the
     # range headers back, which cross-origin it cannot unless they are exposed.
-    expose_headers=[REQUEST_ID_HEADER, "Accept-Ranges", "Content-Range", "Content-Length"],
+    expose_headers=[
+        REQUEST_ID_HEADER,
+        "Accept-Ranges",
+        "Content-Range",
+        "Content-Length",
+        # Without this a cross-origin download saves under the asset id.
+        "Content-Disposition",
+    ],
 )
 
 
@@ -64,7 +82,8 @@ async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONR
 
 
 for router in (health.router, auth.router, stories.router, feedback.router, media.router,
-               admin.router, studio.router, progress.sse_router):
+               admin.router, studio.router, ingest.router, exports.router,
+               progress.sse_router):
     app.include_router(router, prefix="/api")
 
 # WebSocket paths are not prefixed: the route already carries its own /ws prefix.

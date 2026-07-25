@@ -26,6 +26,64 @@ def _lang_directive(code: str, directive: str) -> str:
     return f"\nThe story is in {_language_name(code)}. {directive}"
 
 
+def story_cleanup_prompt(language: str = "en", *, max_chars: int) -> str:
+    """Prompt for the ingest pre-stage.
+
+    This stage transcribes; it does not adapt. A document carries matter that is
+    not the story - title pages, copyright, page furniture, footnotes - and OCR
+    introduces damage that reads as intent, turning `rn` into `m` and dropping
+    line breaks mid-sentence. The model repairs the second while discarding the
+    first, and must not treat either as licence to rewrite.
+
+    The wording is defensive for a reason. An earlier version said "condense it
+    into a faithful retelling", gave only an upper bound, and asked for a note on
+    what had been condensed. A 31,000-character story came back as an 1,100-
+    character plot synopsis - technically within budget, and with every line of
+    dialogue and every scene gone before the script stage ever saw them. So the
+    prose is now explicitly the deliverable, the budget has a floor as well as a
+    ceiling, and cutting means dropping whole passages rather than paraphrasing
+    everything.
+    """
+    floor = int(max_chars * 0.6)
+    base = (
+        "You prepare uploaded documents for an audio-drama studio.\n"
+        "You are given raw text extracted from a file, possibly by OCR, so it may "
+        "contain recognition errors, broken line breaks, and joined or split words.\n"
+        "\n"
+        "Your job is to recover the story as it was written. Reproduce the narrative "
+        "prose and the dialogue as they appear in the source, word for word. Repair "
+        "extraction damage: rejoin sentences broken across lines, fix misrecognised "
+        "characters, and restore paragraph breaks. Drop everything that is not the "
+        "story itself - title pages, copyright notices, tables of contents, page "
+        "headers and footers, footnotes, references, dedications, and front or back "
+        "matter.\n"
+        "\n"
+        "This is NOT a summary task. Do not paraphrase, do not compress descriptions "
+        "into single sentences, and do not narrate events in place of showing them. "
+        "Every line of dialogue in the source must survive as dialogue. A summary is "
+        "the single worst possible output here, because a later stage turns this text "
+        "into a script and it can only work with the words you pass through.\n"
+        "\n"
+        f"Budget: cleaned_text must be at most {max_chars} characters. If the source "
+        f"is shorter than that, return all of it - do not shorten anything. If the "
+        f"source is longer, aim for between {floor} and {max_chars} characters and get "
+        "there by removing whole passages that carry the least drama, keeping what "
+        "remains verbatim. Prefer cutting long descriptive stretches over cutting "
+        "scenes, and never cut dialogue if prose can go instead. Never invent events, "
+        "characters, or lines that are not in the source.\n"
+        "\n"
+        "Also give a short title hint and a short genre hint for the piece, and a "
+        "one-sentence note on what you dropped.\n"
+        "If the text contains no story at all, return an empty cleaned_text and say so "
+        "in the notes."
+    )
+    lang = _lang_directive(
+        language,
+        f"Keep the cleaned text in {_language_name(language)}. Write the notes in English.",
+    )
+    return f"{base}{lang}\n{GUARDRAIL}"
+
+
 def mood_prompt(language: str = "en") -> str:
     base = (
         "You classify short stories, dreams, and memories for an audio-drama studio.\n"
@@ -59,7 +117,14 @@ def character_registry_prompt(language: str = "en") -> str:
         'List the distinct speaking characters in this story. Always include exactly one\n'
         'character with the role "narrator". For each character give a short personality\n'
         "description that a voice actor could use, and one representative sample line.\n"
-        "Do not invent characters who are not implied by the text."
+        "Do not invent characters who are not implied by the text.\n"
+        "For each character also decide how they should sound. Give a vocal gender of "
+        '"feminine", "masculine", or "neutral", and an age band of "child", "young", '
+        '"adult", or "elder". Judge these from the story: names, how others address the '
+        "character, and their described age or manner. When the story genuinely does not "
+        'say, use "neutral" and "adult" rather than guessing. These choices decide which '
+        "voice each character is cast with, and no two characters share a voice, so an "
+        "accurate answer matters more than a confident one."
     )
     lang = _lang_directive(
         language,

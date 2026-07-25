@@ -155,6 +155,68 @@ def compose_episode(clips: list[Clip], music_bed: bytes | None = None) -> bytes:
         return output.read_bytes()
 
 
+# --- export transcodes -----------------------------------------------------
+
+# Every export is derived from the MP3 master, which is itself lossy at 128 kbps.
+# Nothing here recovers quality that the master does not have: FLAC and WAV are
+# lossless *containers* around a lossy source and are only useful for editing,
+# and the lossy targets are set high enough that a second generation of encoding
+# is not audible. MP3 is absent on purpose - the master is already MP3, and
+# re-encoding it to itself would lose quality for nothing.
+AUDIO_EXPORTS: dict[str, tuple[list[str], str, str]] = {
+    "m4a": (["-c:a", "aac", "-b:a", "192k"], "m4a", "audio/mp4"),
+    "opus": (["-c:a", "libopus", "-b:a", "96k"], "opus", "audio/ogg"),
+    "flac": (["-c:a", "flac"], "flac", "audio/flac"),
+    "wav": (["-c:a", "pcm_s16le"], "wav", "audio/wav"),
+}
+
+# The master, described in the same shape so callers can look up any format.
+MASTER_FORMAT = "mp3"
+MASTER_CONTENT_TYPE = "audio/mpeg"
+
+
+def export_content_type(fmt: str) -> str:
+    if fmt == MASTER_FORMAT:
+        return MASTER_CONTENT_TYPE
+    return AUDIO_EXPORTS[fmt][2]
+
+
+def transcode(audio: bytes, fmt: str) -> bytes:
+    """Re-encode the episode master into another container.
+
+    Same safety pattern as `compose_episode`: argv list, temp files this function
+    created, and `fmt` is looked up in a fixed table rather than interpolated, so
+    a caller cannot smuggle ffmpeg flags through it.
+    """
+    if fmt == MASTER_FORMAT:
+        return audio
+    if fmt not in AUDIO_EXPORTS:
+        raise AssemblyError(f"unsupported export format: {fmt}")
+
+    codec_args, extension, _ = AUDIO_EXPORTS[fmt]
+
+    with tempfile.TemporaryDirectory(prefix="daastaan-exp-") as tmp:
+        workdir = Path(tmp)
+        source = workdir / f"master.{MASTER_FORMAT}"
+        source.write_bytes(audio)
+        output = workdir / f"episode.{extension}"
+
+        command = [
+            ffmpeg_path(), "-hide_banner", "-loglevel", "error", "-y",
+            "-i", str(source),
+            *codec_args,
+            str(output),
+        ]
+        result = subprocess.run(command, capture_output=True, text=True, timeout=600)  # noqa: S603
+        if result.returncode != 0:
+            log.error("transcode_failed", fmt=fmt, stderr=result.stderr[-2000:])
+            raise AssemblyError(f"ffmpeg exited {result.returncode}: {result.stderr[-500:]}")
+
+        data = output.read_bytes()
+        log.info("episode_transcoded", fmt=fmt, source_bytes=len(audio), output_bytes=len(data))
+        return data
+
+
 def build_scene_timeline(
     lines: list, audio_assets: dict,
 ) -> dict[str, tuple[int, int]]:

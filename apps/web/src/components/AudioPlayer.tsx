@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { ExportPanel } from './ExportPanel'
 import type { Asset, DialogueLine } from '../types'
 
 type Props = {
@@ -10,6 +11,8 @@ type Props = {
   onSeekHandled?: () => void
   /** Story is regenerating — keep showing the previous episode instead of empty. */
   regenerating?: boolean
+  /** Enables the download panel. Omitted while a mix does not exist yet. */
+  storyId?: string
 }
 
 function formatTime(seconds: number) {
@@ -47,6 +50,7 @@ export function AudioPlayer({
   seekLineId,
   onSeekHandled,
   regenerating = false,
+  storyId,
 }: Props) {
   const liveEpisode = useMemo(
     () => assets.find((a) => a.kind === 'final_episode') ?? null,
@@ -252,6 +256,9 @@ export function AudioPlayer({
           </div>
         </div>
       </div>
+      {/* Only offered against a live mix: exporting the previous episode while a
+          rebuild is in flight would hand over a file the user did not ask for. */}
+      {storyId && <ExportPanel storyId={storyId} enabled={!!liveEpisode} />}
     </section>
   )
 }

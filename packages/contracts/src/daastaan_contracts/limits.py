@@ -5,15 +5,31 @@ them at the API boundary, and again in the worker, because a task can be retried
 long after the request that created it.
 """
 
-MAX_STORY_INPUT_CHARS = 6000
-MAX_FEEDBACK_CHARS = 500
-
 MAX_SCENES = 6
 MAX_CHARACTERS = 6
 MAX_LINES = 60
 
 MAX_LINE_CHARS = 400
-MAX_IMAGES_PER_STORY = 4
+
+# Sized to the longest script the pipeline can emit (MAX_LINES * MAX_LINE_CHARS).
+# Accepting less than that starves the script stage: it was picking 60 lines out
+# of 6000 characters, so an uploaded story had to be cut by 80% before the stage
+# that actually knows how to select scenes and dialogue ever saw it.
+#
+# Raising this is close to free. `raw_text` reaches four stages, two of them on
+# the cheap model, so quadrupling it adds a couple of cents per story - while the
+# episode length, and therefore the TTS spend that dominates the bill, stays
+# fixed by MAX_LINES.
+MAX_STORY_INPUT_CHARS = MAX_LINES * MAX_LINE_CHARS
+
+MAX_FEEDBACK_CHARS = 500
+
+# One per scene. These were 4 and 6, which is not a budget so much as a gallery
+# with holes in it: the last two scenes rendered as "No artwork" and read as a
+# failure rather than as a cap. Tied together so they cannot drift apart again -
+# at $0.04 an image the two extra scenes cost less than a rounding error against
+# the TTS for an episode.
+MAX_IMAGES_PER_STORY = MAX_SCENES
 
 # Per user, per rolling window.
 RATE_LIMIT_GENERATIONS = 5

@@ -83,6 +83,53 @@ export type DispatchAccepted = {
   task_id: string
 }
 
+export type ExportFormat = {
+  format: string
+  label: string
+  content_type: string
+  /** Why you would pick this one. Written by the API so both apps agree. */
+  detail: string
+  /** The format the pipeline already produced, so downloading it is lossless. */
+  recommended: boolean
+  ready: boolean
+  url: string | null
+  size_bytes: number | null
+}
+
+export type IngestStatus = 'pending' | 'extracting' | 'cleaning' | 'ready' | 'failed'
+
+export type Ingest = {
+  id: string
+  filename: string
+  status: IngestStatus
+  /** How the text came out: text_layer, ocr, docx or plain_text. */
+  method: string | null
+  page_count: number | null
+  raw_chars: number | null
+  cleaned_text: string | null
+  title_hint: string | null
+  genre_hint: string | null
+  notes: string | null
+  error: string | null
+}
+
+/** What the upload zone says while a file is being processed. Extraction gives
+ *  no incremental progress, so these describe the phase rather than a percentage. */
+export const INGEST_STATUS_LABELS: Record<IngestStatus, string> = {
+  pending: 'Queued',
+  extracting: 'Reading the file',
+  cleaning: 'Cleaning up the text',
+  ready: 'Ready to review',
+  failed: 'Could not read that file',
+}
+
+export const INGEST_METHOD_LABELS: Record<string, string> = {
+  text_layer: 'read directly',
+  ocr: 'read with OCR',
+  docx: 'read from Word',
+  plain_text: 'read as text',
+}
+
 export type Scene = {
   id: string
   index: number
@@ -177,7 +224,7 @@ export const STAGE_DESCRIPTIONS: Record<string, string> = {
   narrator_persona:
     'Chooses how the narrator should sound: their warmth, pace and distance from the story.',
   voice_assignment:
-    'Casts a real voice for each character, matching age, gender and personality.',
+    'Casts a distinct voice for each character, matched to their age, gender and personality. No two characters share one.',
   tts_synthesis:
     'Records every line with its assigned voice and emotion. This is the longest stage.',
   image_generation: 'Paints cover artwork for each scene.',

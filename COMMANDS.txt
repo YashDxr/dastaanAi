@@ -69,13 +69,19 @@ curl -s -c /tmp/daastaan.txt -X POST http://localhost:8000/api/auth/login -H 'Co
 curl -s -b /tmp/daastaan.txt -X POST http://localhost:8000/api/stories -H 'Content-Type: application/json' -d '{"raw_text":"I dreamt the station flooded and a woman in red called my name.","genre_hint":"surreal thriller"}' | Create story via curl
 curl -s -b /tmp/daastaan.txt http://localhost:8000/api/stories/STORY_ID/jobs | Check generation progress
 curl -s -b /tmp/daastaan.txt http://localhost:8000/api/stories/STORY_ID | Inspect story + assets
+curl -s -b /tmp/daastaan.txt -F 'file=@/path/to/story.pdf' http://localhost:8000/api/ingest | Upload a PDF/DOCX/image for extraction
+curl -s -b /tmp/daastaan.txt http://localhost:8000/api/ingest/INGEST_ID | Check extraction + see the cleaned text
+curl -s -b /tmp/daastaan.txt http://localhost:8000/api/stories/STORY_ID/exports | List download formats
+curl -s -b /tmp/daastaan.txt -X POST http://localhost:8000/api/stories/STORY_ID/exports -H 'Content-Type: application/json' -d '{"format":"m4a"}' | Prepare another audio format
+docker compose exec redis redis-cli -n 1 --scan --pattern 'daastaan:cache:*' | List cached entries (cache is on db 1)
+docker compose exec redis redis-cli -n 1 smembers daastaan:cache:index:STORY_ID | Cache entries written by one story
 docker compose exec postgres psql -U daastaan -d daastaan | Open SQL shell
 docker compose exec postgres psql -U daastaan -d daastaan -c "UPDATE users SET role = 'admin' WHERE email = 'you@example.com';" | Make a user admin
 docker compose exec postgres psql -U daastaan -d daastaan -c "SELECT id, title, status FROM stories ORDER BY created_at DESC LIMIT 10;" | Recent stories
 docker compose exec postgres psql -U daastaan -d daastaan -c "SELECT stage, status, left(error,80) FROM jobs ORDER BY created_at DESC LIMIT 30;" | Recent job errors
 docker compose logs api worker-agents worker-media 2>&1 \| grep YOUR_REQUEST_ID | Trace one request in logs
 {compose_project="daastaan"} |= "YOUR_REQUEST_ID" | Grafana Explore query for one request
-http://localhost:5540                       | Redis Insight UI
+http://localhost:5540                       | Redis Insight UI (auto-connects to the cache on db 1)
 http://localhost:5555                       | Flower (Celery) UI
 http://localhost:3000                       | Grafana (admin/admin)
 http://localhost:3100                       | Loki

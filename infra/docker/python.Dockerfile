@@ -6,12 +6,22 @@
 #
 # ffmpeg is installed here rather than pulled in as a Python wheel: only the
 # assembly worker needs it, but a separate image for one apt package is not worth
-# the extra build.
+# the extra build. The same reasoning covers tesseract and poppler, which only
+# the ingest task uses.
+#
+# tesseract language packs are per-language: eng and hin cover what the app
+# currently offers. Adding a language to the UI means adding its pack here.
 
 FROM python:3.12-slim-bookworm
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends ffmpeg curl \
+    && apt-get install -y --no-install-recommends \
+        ffmpeg \
+        curl \
+        tesseract-ocr \
+        tesseract-ocr-eng \
+        tesseract-ocr-hin \
+        poppler-utils \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=ghcr.io/astral-sh/uv:0.11 /uv /usr/local/bin/uv

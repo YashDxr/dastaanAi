@@ -133,6 +133,14 @@ services:
     image: redis/redisinsight:latest
     ports:
       - "5540:5540"
+    environment:
+      # Adds the connection on first boot so the UI opens on the cache instead
+      # of an empty database list. db 1 is the cache; db 0 is the Celery broker,
+      # whose thousands of task-result keys are what made the cache look empty.
+      RI_REDIS_HOST: redis
+      RI_REDIS_PORT: 6379
+      RI_REDIS_DB: 1
+      RI_REDIS_ALIAS: daastaan-cache
     volumes:
       - redisinsight:/data
     depends_on:
