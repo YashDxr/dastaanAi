@@ -8,6 +8,8 @@ venv/
 .pytest_cache/
 
 .env
+.env.music
+.music-service/
 .env.local
 *.local
 

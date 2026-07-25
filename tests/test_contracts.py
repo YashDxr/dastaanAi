@@ -45,6 +45,12 @@ class TestStagePlanning:
         ]:
             assert StageName.ASSEMBLY in plan_stages(scope, stage)
 
+    def test_music_scope_only_regenerates_music_and_mix(self):
+        assert plan_stages(Scope.MUSIC, StageName.MUSIC_GENERATION) == (
+            StageName.MUSIC_GENERATION,
+            StageName.ASSEMBLY,
+        )
+
     def test_invalid_entry_point_rejected(self):
         """A line-scoped request cannot re-enter at an arbitrary stage, which is
         what stops a crafted directive from triggering a full regeneration."""
@@ -81,6 +87,9 @@ class TestObjectKeys:
         image = ids.dedupe_key(AssetKind.SCENE_IMAGE, scene_id="scene_01")
         final = ids.dedupe_key(AssetKind.FINAL_EPISODE)
         assert len({audio, image, final}) == 3
+
+    def test_music_bed_is_a_single_idempotent_asset(self):
+        assert ids.dedupe_key(AssetKind.MUSIC_BED) == "music_bed:single"
 
 
 class TestStoryState:
