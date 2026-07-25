@@ -22,6 +22,9 @@ export function Studio({ user, storyId, onLogout, onHome, onCompose }: Props) {
   const [progress, setProgress] = useState<Progress | null>(null)
   const [feedback, setFeedback] = useState<FeedbackEntry[]>([])
   const [versions, setVersions] = useState<Version[]>([])
+  const [baseVersionId, setBaseVersionId] = useState<string | null>(null)
+  const [baseDetail, setBaseDetail] = useState<StoryDetail | null>(null)
+  const [loadingBaseVersion, setLoadingBaseVersion] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const [tab, setTab] = useState<'episode' | 'scenes'>('episode')
@@ -32,6 +35,7 @@ export function Studio({ user, storyId, onLogout, onHome, onCompose }: Props) {
   // told apart from the one being replaced.
   const respeakFromVersion = useRef<string | null>(null)
   const pendingRespeakLine = useRef<string | null>(null)
+  const baseVersionRequest = useRef(0)
   // Assets from the last ready version — kept while regenerating so Play stays up.
   const [stickyAssets, setStickyAssets] = useState<StoryDetail['assets']>([])
 
@@ -87,6 +91,14 @@ export function Studio({ user, storyId, onLogout, onHome, onCompose }: Props) {
   }, [refresh])
 
   useEffect(() => {
+    // On first open, the current revision is the branch source. Once the
+    // listener intentionally picks a historic version we leave that choice in
+    // place while progress refreshes the current child in the background.
+    const currentVersionId = detail?.version?.id
+    if (currentVersionId) setBaseVersionId((selected) => selected ?? currentVersionId)
+  }, [detail?.version?.id])
+
+  useEffect(() => {
     const status = progress?.status ?? detail?.story.status
     if (status !== 'generating') return
     return watchProgress(storyId, () => {
@@ -113,6 +125,36 @@ export function Studio({ user, storyId, onLogout, onHome, onCompose }: Props) {
     ? liveImages
     : stickyAssets.filter((a) => a.kind === 'scene_image')
   const scenes = state?.scenes ?? []
+  const timelineDetail =
+    baseVersionId && baseVersionId !== detail?.version?.id ? baseDetail : detail
+  const timelineState = timelineDetail?.state
+
+  async function selectBaseVersion(versionId: string) {
+    const request = ++baseVersionRequest.current
+    setBaseVersionId(versionId)
+    if (versionId === detail?.version?.id) {
+      setBaseDetail(null)
+      setLoadingBaseVersion(false)
+      return
+    }
+
+    setLoadingBaseVersion(true)
+    try {
+      const selected = await storiesApi.version(storyId, versionId)
+      if (request === baseVersionRequest.current) {
+        setBaseDetail(selected)
+        setError(null)
+      }
+    } catch (err) {
+      if (request === baseVersionRequest.current) {
+        setBaseVersionId(detail?.version?.id ?? null)
+        setBaseDetail(null)
+        setError(formatError(err))
+      }
+    } finally {
+      if (request === baseVersionRequest.current) setLoadingBaseVersion(false)
+    }
+  }
 
   async function respeakLine(lineId: string) {
     setBusy(true)
@@ -139,15 +181,25 @@ export function Studio({ user, storyId, onLogout, onHome, onCompose }: Props) {
     }
   }
 
-  async function branchFromScene(sceneId: string, instructionDelta: string) {
+  async function branchFromScene(
+    sceneId: string,
+    instructionDelta: string,
+    sourceVersionId: string,
+  ) {
     setBusy(true)
     try {
-      await storiesApi.regenerate(storyId, {
+      const accepted = await storiesApi.regenerate(storyId, {
         scope: 'scene',
         target_stage: 'story_understanding',
         target_id: sceneId,
         instruction_delta: instructionDelta,
+        base_version_id: sourceVersionId,
+        expected_current_version_id: detail?.version?.id ?? null,
       })
+      // The new child becomes current, so show its in-flight timeline rather
+      // than leaving the Time Machine focused on the historic branch source.
+      setBaseVersionId(accepted.version_id)
+      setBaseDetail(null)
       await refresh()
     } catch (err) {
       setError(formatError(err))
@@ -248,11 +300,14 @@ export function Studio({ user, storyId, onLogout, onHome, onCompose }: Props) {
                   onRegenerateLine={respeakLine}
                 />
                 <StoryTimeMachine
-                  scenes={scenes}
-                  lines={state?.lines ?? []}
+                  scenes={timelineState?.scenes ?? []}
+                  lines={timelineState?.lines ?? []}
                   versions={versions}
                   currentVersionId={detail.version?.id}
+                  baseVersionId={baseVersionId}
+                  loadingVersion={loadingBaseVersion}
                   disabled={busy || regenerating || detail.story.status !== 'ready' || !detail.version}
+                  onSelectBaseVersion={selectBaseVersion}
                   onCreateBranch={branchFromScene}
                 />
                 <FeedbackComposer

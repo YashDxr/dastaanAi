@@ -15,12 +15,16 @@ from daastaan_agent.nodes import (
 )
 from daastaan_contracts import (
     CharacterRole,
+    DialogueScriptOutput,
+    EmotionTaggingOutput,
     LineType,
     Scope,
     StageName,
+    StoryUnderstandingOutput,
     ValidatedDirective,
     VoiceGender,
 )
+from daastaan_contracts.models import DialogueLineOutput, EmotionTagOutput, SceneOutput
 
 
 class TestMoodClassification:
@@ -100,13 +104,124 @@ class TestStoryUnderstanding:
         story_understanding(stub_session, state_after_mood, mock_gateway)
         request = captured["user_content"]
 
-        assert "<current_timeline>" in request
-        assert "Lily leaves the garden to seek help." in request
-        assert "Preserve every event, fact, character motivation" in request
+        assert "<frozen_prefix_timeline>" in request
+        assert "Lily finds the secret door." in request
+        assert "Return ONLY replacement scenes" in request
         assert (
             "Additional direction from the listener: Lily asks the village for help instead."
             in request
         )
+
+    def test_scene_branch_structurally_preserves_prefix_despite_model_rewrite(
+        self, stub_session, state_fully_staged, mock_gateway
+    ):
+        """Prompt guidance is not the safety mechanism: model attempts to
+        change an old scene, line, character, or tag are discarded by the
+        structural splice before downstream media sees the state."""
+        from daastaan_agent.nodes import story_understanding
+
+        state_fully_staged.regen = ValidatedDirective(
+            scope=Scope.SCENE,
+            target_stage=StageName.STORY_UNDERSTANDING,
+            target_id="scene_01",
+            instruction_delta="Lily returns home before meeting the fox.",
+        )
+        original_scene = state_fully_staged.scenes[0].model_copy(deep=True)
+        original_lines = [line.model_copy(deep=True) for line in state_fully_staged.lines[:2]]
+        original_characters = [
+            character.model_copy(deep=True) for character in state_fully_staged.characters
+        ]
+        original_persona = state_fully_staged.narrator_persona.model_copy(deep=True)
+
+        # The first response deliberately tries to rewrite the old scene. It
+        # must become the replacement target (Scene 2), never mutate Scene 1.
+        mock_gateway._responses[StoryUnderstandingOutput] = StoryUnderstandingOutput(
+            title="A rewritten title",
+            arc_summary="A different future follows the locked opening.",
+            setting="A changing garden",
+            scenes=[
+                SceneOutput(
+                    title="Changed discovery",
+                    summary="Lily never finds the door.",
+                    setting="Elsewhere",
+                    mood_tag="wrong",
+                ),
+                SceneOutput(
+                    title="Alternate future",
+                    summary="Lily chooses the road home.",
+                    setting="Village road",
+                    mood_tag="thoughtful",
+                ),
+            ],
+        )
+        state = story_understanding(stub_session, state_fully_staged, mock_gateway)
+        assert state.scenes[0] == original_scene
+        assert state.scenes[1].id == "scene_01"
+        assert state.scenes[1].title == "Changed discovery"
+
+        # Returning altered records for old cast members cannot recast audio
+        # already in the carried prefix.
+        state = character_registry(stub_session, state, mock_gateway)
+        assert state.characters == original_characters
+
+        mock_gateway._responses[DialogueScriptOutput] = DialogueScriptOutput(
+            lines=[
+                DialogueLineOutput(
+                    scene_index=0,
+                    speaker="Lily",
+                    text="Changed prefix line that must be ignored.",
+                    line_type=LineType.DIALOGUE,
+                ),
+                DialogueLineOutput(
+                    scene_index=1,
+                    speaker="Lily",
+                    text="I will go home and ask for help.",
+                    line_type=LineType.DIALOGUE,
+                ),
+                DialogueLineOutput(
+                    scene_index=2,
+                    speaker="Narrator",
+                    text="The new decision changed the road ahead.",
+                    line_type=LineType.NARRATION,
+                ),
+            ]
+        )
+        state = dialogue_attribution(stub_session, state, mock_gateway)
+        assert state.lines[:2] == original_lines
+        assert all(line.scene_id != "scene_00" for line in state.lines[2:])
+
+        # The tagger tries to modify an immutable prefix id; only target/suffix
+        # line ids are accepted.
+        mock_gateway._responses[EmotionTaggingOutput] = EmotionTaggingOutput(
+            tags=[
+                EmotionTagOutput(
+                    line_id="line_0000",
+                    emotion="changed",
+                    intensity=5,
+                    tts_instructions="Wrong prefix mutation.",
+                    pause_after_ms=0,
+                ),
+                EmotionTagOutput(
+                    line_id="line_0002",
+                    emotion="resolved",
+                    intensity=3,
+                    tts_instructions="Clear, resolved delivery.",
+                    pause_after_ms=300,
+                ),
+            ]
+        )
+        state = emotion_tagging(stub_session, state, mock_gateway)
+        assert state.lines[:2] == original_lines
+        assert state.lines[2].emotion == "resolved"
+
+        # Persona and voice assignment retain their exact old state; the
+        # prefix asset metadata continues to agree with the cast.
+        state = narrator_persona(stub_session, state, mock_gateway)
+        assert state.narrator_persona == original_persona
+        state = voice_assignment(stub_session, state, mock_gateway)
+        assert [character.voice_preset for character in state.characters] == [
+            character.voice_preset for character in original_characters
+        ]
 
 
 class TestCharacterRegistry:

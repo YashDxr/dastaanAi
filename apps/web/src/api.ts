@@ -40,6 +40,8 @@ export const stories = {
   list: () => apiFetch<Story[]>('/stories'),
   get: (id: string) => apiFetch<StoryDetail>(`/stories/${id}`),
   versions: (id: string) => apiFetch<Version[]>(`/stories/${id}/versions`),
+  version: (id: string, versionId: string) =>
+    apiFetch<StoryDetail>(`/stories/${id}/versions/${versionId}`),
   create: (raw_text: string, genre_hint?: string) =>
     apiFetch<DispatchAccepted>('/stories', {
       method: 'POST',
@@ -65,6 +67,8 @@ export const stories = {
       target_stage: string
       target_id?: string | null
       instruction_delta?: string
+      base_version_id?: string | null
+      expected_current_version_id?: string | null
     },
   ) =>
     apiFetch<DispatchAccepted>(`/stories/${id}/regenerate`, {

@@ -106,7 +106,10 @@ def score(character: Character, voice: Voice) -> int:
 
 
 def assign_voices(
-    characters: list[Character], *, pins: dict[str, str] | None = None
+    characters: list[Character],
+    *,
+    pins: dict[str, str] | None = None,
+    unavailable: set[str] | None = None,
 ) -> dict[str, Voice]:
     """One voice per character, keyed by character id.
 
@@ -121,7 +124,11 @@ def assign_voices(
     if not characters:
         return {}
 
-    available = {voice.id: voice for voice in VOICE_CATALOGUE}
+    available = {
+        voice.id: voice
+        for voice in VOICE_CATALOGUE
+        if voice.id not in (unavailable or set())
+    }
     assigned: dict[str, Voice] = {}
 
     order = sorted(

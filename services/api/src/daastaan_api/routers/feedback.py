@@ -29,6 +29,8 @@ def submit_feedback(
         raise HTTPException(status.HTTP_409_CONFLICT, "story has no generated version yet")
     if session.get(StoryVersion, story.current_version_id) is None:
         raise HTTPException(status.HTTP_409_CONFLICT, "current version missing")
+    if story.status != StoryStatus.READY:
+        raise HTTPException(status.HTTP_409_CONFLICT, "story regeneration is already in progress")
 
     feedback = Feedback(
         version_id=story.current_version_id,

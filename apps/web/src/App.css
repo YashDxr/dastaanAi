@@ -1071,13 +1071,10 @@
 }
 
 .revision-branch li {
-  align-items: baseline;
   background: color-mix(in srgb, var(--mist) 66%, #fff);
   border: 1px solid var(--line);
   border-radius: 999px;
-  display: inline-flex;
-  gap: 0.32rem;
-  padding: 0.28rem 0.55rem;
+  overflow: hidden;
 }
 
 .revision-branch li.current {
@@ -1090,6 +1087,21 @@
   color: var(--teal-deep);
   font-size: 0.75rem;
   font-weight: 700;
+}
+
+.revision-branch button {
+  align-items: baseline;
+  background: transparent;
+  border: 0;
+  color: inherit;
+  cursor: pointer;
+  display: inline-flex;
+  gap: 0.32rem;
+  padding: 0.28rem 0.55rem;
+}
+
+.revision-branch button:disabled {
+  cursor: not-allowed;
 }
 
 .revision-branch small {

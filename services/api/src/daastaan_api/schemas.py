@@ -80,7 +80,12 @@ class IngestOut(BaseModel):
 class CreateStoryRequest(BaseModel):
     raw_text: str = Field(min_length=20, max_length=limits.MAX_STORY_INPUT_CHARS)
     genre_hint: str | None = Field(default=None, max_length=60)
-    language: str = Field(default="en", min_length=2, max_length=5, pattern=r"^[a-z]{2,3}(-[A-Z]{2})?$")
+    language: str = Field(
+        default="en",
+        min_length=2,
+        max_length=5,
+        pattern=r"^[a-z]{2,3}(-[A-Z]{2})?$",
+    )
     output_format: Literal["audio", "video", "both"] = "audio"
 
 
@@ -171,6 +176,14 @@ class RegenerateRequest(BaseModel):
     target_stage: StageName
     target_id: str | None = Field(default=None, max_length=64)
     instruction_delta: str = Field(default="", max_length=limits.MAX_FEEDBACK_CHARS)
+    # A Story Time Machine branch can intentionally start from an older
+    # revision. The route verifies that this version belongs to the owned story;
+    # callers cannot use it to read or fork another user's state.
+    base_version_id: str | None = Field(default=None, max_length=64)
+    # Browser clients send the current pointer they last rendered. It is an
+    # optimistic-concurrency guard, separate from ``base_version_id`` so an
+    # intentional branch from v1 can still become a sibling of current v3.
+    expected_current_version_id: str | None = Field(default=None, max_length=64)
 
 
 class DispatchAccepted(BaseModel):

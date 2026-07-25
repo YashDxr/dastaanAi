@@ -1,4 +1,4 @@
-import { useMemo, useState, type FormEvent } from 'react'
+import { useEffect, useMemo, useState, type FormEvent } from 'react'
 import type { DialogueLine, Scene, Version } from '../types'
 
 /** Kept below the API's 500-character directive cap once the scene context is
@@ -10,10 +10,17 @@ type Props = {
   lines: DialogueLine[]
   versions: Version[]
   currentVersionId: string | null | undefined
+  baseVersionId: string | null | undefined
+  loadingVersion?: boolean
   disabled?: boolean
+  onSelectBaseVersion: (versionId: string) => void
   /** The parent owns the API call so this component stays useful as a purely
    * presentational, accessible timeline. */
-  onCreateBranch: (sceneId: string, instructionDelta: string) => Promise<void>
+  onCreateBranch: (
+    sceneId: string,
+    instructionDelta: string,
+    baseVersionId: string,
+  ) => Promise<void>
 }
 
 function compact(value: string, max: number): string {
@@ -49,7 +56,10 @@ export function StoryTimeMachine({
   lines,
   versions,
   currentVersionId,
+  baseVersionId,
+  loadingVersion = false,
   disabled = false,
+  onSelectBaseVersion,
   onCreateBranch,
 }: Props) {
   const [selectedSceneId, setSelectedSceneId] = useState<string | null>(null)
@@ -57,18 +67,24 @@ export function StoryTimeMachine({
   const [submitting, setSubmitting] = useState(false)
 
   const selectedScene = scenes.find((scene) => scene.id === selectedSceneId) ?? scenes[0] ?? null
-  const selectionLocked = disabled || submitting
+  const selectionLocked = disabled || submitting || loadingVersion
   const versionsById = useMemo(() => new Map(versions.map((version) => [version.id, version])), [versions])
+
+  useEffect(() => {
+    setSelectedSceneId(null)
+    setAlternateDecision('')
+  }, [baseVersionId])
 
   async function submitBranch(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
-    if (!selectedScene || !alternateDecision.trim() || selectionLocked) return
+    if (!selectedScene || !baseVersionId || !alternateDecision.trim() || selectionLocked) return
 
     setSubmitting(true)
     try {
       await onCreateBranch(
         selectedScene.id,
         buildSceneBranchInstruction(selectedScene, alternateDecision),
+        baseVersionId,
       )
       setAlternateDecision('')
     } catch {
@@ -89,8 +105,8 @@ export function StoryTimeMachine({
           <h2 id="time-machine-title">Change one turn. Rebuild the future.</h2>
         </div>
         <p className="time-machine-copy">
-          Pick a scene or a line, choose what happens instead, and create a new version. Your
-          current episode stays in the revision history.
+          Pick a version, choose a scene or line, and create a sibling future. Every prior
+          version stays playable in the revision history.
         </p>
       </div>
 
@@ -98,11 +114,20 @@ export function StoryTimeMachine({
         <ol className="revision-branch" aria-label="Story version history">
           {versions.map((version) => {
             const current = version.id === currentVersionId
+            const selected = version.id === baseVersionId
             return (
-              <li key={version.id} className={current ? 'current' : ''}>
-                <span>v{version.version_number}</span>
-                <small>{parentLabel(version, versionsById)}</small>
-                {current && <strong>Current</strong>}
+              <li key={version.id} className={selected ? 'current' : ''}>
+                <button
+                  type="button"
+                  disabled={selectionLocked}
+                  aria-pressed={selected}
+                  onClick={() => onSelectBaseVersion(version.id)}
+                >
+                  <span>v{version.version_number}</span>
+                  <small>{parentLabel(version, versionsById)}</small>
+                  {current && <strong>Current</strong>}
+                  {selected && !current && <strong>Branch source</strong>}
+                </button>
               </li>
             )
           })}
@@ -155,7 +180,9 @@ export function StoryTimeMachine({
 
       <form className="time-machine-form" onSubmit={submitBranch}>
         <label htmlFor="alternate-decision">
-          What changes in Scene {selectedScene.index + 1}?
+          {loadingVersion
+            ? 'Loading this version…'
+            : `What changes in Scene ${selectedScene.index + 1}?`}
         </label>
         <textarea
           id="alternate-decision"

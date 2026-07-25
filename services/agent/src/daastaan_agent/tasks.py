@@ -25,6 +25,8 @@ from daastaan_common import (
     get_settings,
     get_store,
     ids,
+    next_version_number,
+    prepare_regeneration_state,
     session_scope,
 )
 from daastaan_common.models import Feedback, IngestJob, MediaAsset, Story, StoryVersion
@@ -131,9 +133,17 @@ def _bypass_cache(state: StoryState) -> bool:
     return state.regen is not None
 
 
-def _mark_story(session: Any, story_id: str, status: StoryStatus) -> None:
+def _mark_story(
+    session: Any, story_id: str, version_id: str, status: StoryStatus
+) -> None:
+    """Update global story status only while this is still the active version.
+
+    Celery can finish/retry an older branch after a newer one becomes current.
+    Its completion must not flip the newer branch from generating to ready (or
+    failed) merely because both rows share a story id.
+    """
     story = session.get(Story, story_id)
-    if story:
+    if story and story.current_version_id == version_id:
         story.status = status
         session.add(story)
         session.commit()
@@ -217,7 +227,7 @@ def run_stage(self, version_id: str, stage_value: str, user_id: str) -> str:  # 
             repo.finish_job(session, job, status=JobStatus.FAILED, error=str(exc))
             # If all retries exhausted, mark the story as failed
             if self.request.retries >= self.max_retries:
-                _mark_story(session, state.story_id, StoryStatus.FAILED)
+                _mark_story(session, state.story_id, version_id, StoryStatus.FAILED)
                 log.error(
                     "stage_exhausted_retries",
                     stage=stage_value,
@@ -570,11 +580,11 @@ def assemble(self, version_id: str, user_id: str) -> str:  # type: ignore[no-unt
                     queue=Queue.ASSEMBLY.value
                 )
             else:
-                _mark_story(session, state.story_id, StoryStatus.READY)
+                _mark_story(session, state.story_id, version_id, StoryStatus.READY)
                 repo.publish(state.story_id, {"type": "complete", "version_id": version_id})
         except Exception as exc:
             repo.finish_job(session, job, status=JobStatus.FAILED, error=str(exc))
-            _mark_story(session, state.story_id, StoryStatus.FAILED)
+            _mark_story(session, state.story_id, version_id, StoryStatus.FAILED)
             raise
     return version_id
 
@@ -592,7 +602,7 @@ def compose_video_task(self, version_id: str, user_id: str) -> str:  # type: ign
         try:
             if state.output_format not in ("video", "both"):
                 repo.finish_job(session, job, status=JobStatus.SKIPPED)
-                _mark_story(session, state.story_id, StoryStatus.READY)
+                _mark_story(session, state.story_id, version_id, StoryStatus.READY)
                 repo.publish(state.story_id, {"type": "complete", "version_id": version_id})
                 return version_id
 
@@ -667,11 +677,11 @@ def compose_video_task(self, version_id: str, user_id: str) -> str:  # type: ign
             state.final_video_key = key
             repo.save_state(session, state)
             repo.finish_job(session, job, status=JobStatus.SUCCEEDED)
-            _mark_story(session, state.story_id, StoryStatus.READY)
+            _mark_story(session, state.story_id, version_id, StoryStatus.READY)
             repo.publish(state.story_id, {"type": "complete", "version_id": version_id})
         except Exception as exc:
             repo.finish_job(session, job, status=JobStatus.FAILED, error=str(exc))
-            _mark_story(session, state.story_id, StoryStatus.FAILED)
+            _mark_story(session, state.story_id, version_id, StoryStatus.FAILED)
             raise
     return version_id
 
@@ -775,7 +785,7 @@ def _on_pipeline_error(version_id: str, user_id: str) -> None:
     """link_error callback: mark the story FAILED when any chained task fails."""
     with session_scope() as session:
         state = repo.load_state(session, version_id)
-        _mark_story(session, state.story_id, StoryStatus.FAILED)
+        _mark_story(session, state.story_id, version_id, StoryStatus.FAILED)
 
 
 @celery_app.task(name="daastaan.pipeline.on_error", bind=True)
@@ -786,7 +796,7 @@ def pipeline_error_handler(self, request, exc, traceback, version_id: str = "", 
     with session_scope() as session:
         try:
             state = repo.load_state(session, version_id)
-            _mark_story(session, state.story_id, StoryStatus.FAILED)
+            _mark_story(session, state.story_id, version_id, StoryStatus.FAILED)
             log.error("chain_failed_marking_story", version_id=version_id, error=str(exc))
         except Exception:
             log.error("error_handler_failed", version_id=version_id, exc_info=True)
@@ -861,7 +871,7 @@ def run_pipeline(self, story_id: str, version_id: str, user_id: str) -> str:  # 
             error=str(exc),
         )
         with session_scope() as session:
-            _mark_story(session, story_id, StoryStatus.FAILED)
+            _mark_story(session, story_id, version_id, StoryStatus.FAILED)
             if pipeline_run:
                 try:
                     run = session.get(type(pipeline_run), pipeline_run.id)
@@ -959,8 +969,13 @@ def _fail_feedback(story_id: str, feedback_id: str, exc: Exception) -> None:
 
             story = session.get(Story, story_id)
             # Only undo the `generating` the API set for this request. If a
-            # regeneration is already running, leave it alone.
-            if story and story.status == StoryStatus.GENERATING:
+            # newer branch is now current, leave it alone.
+            if (
+                story
+                and feedback is not None
+                and story.current_version_id == feedback.version_id
+                and story.status == StoryStatus.GENERATING
+            ):
                 story.status = StoryStatus.READY
                 session.add(story)
             session.commit()
@@ -1043,46 +1058,59 @@ def _interpret_feedback(
 
         target_id = _resolve_target(state, scope, directive.target_id)
 
+        # The feedback endpoint marks the story generating before dispatch, but
+        # an old/retried interpreter can still wake after a newer version wins.
+        # Lock and compare the pointer just before mutating it so it cannot
+        # resurrect a stale feedback branch.
+        story = session.exec(
+            select(Story)
+            .where(Story.id == story_id)
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        ).one_or_none()
+        if story is None or story.current_version_id != version_id:
+            raise ValueError("feedback was superseded by a newer story version")
+
         parent = session.get(StoryVersion, version_id)
+        if parent is None or parent.story_id != story_id:
+            raise LookupError(f"story version {version_id} not found")
         child = StoryVersion(
             story_id=story_id,
             parent_version_id=version_id,
-            version_number=(parent.version_number if parent else 1) + 1,
-            genre=parent.genre if parent else None,
-            mood=parent.mood if parent else None,
-            state_json=dict(parent.state_json) if parent else {},
+            version_number=next_version_number(session, story_id=story_id),
+            genre=parent.genre,
+            mood=parent.mood,
+            state_json=dict(parent.state_json),
             created_from_feedback_id=feedback_id,
         )
         session.add(child)
         session.flush()
 
-        if parent:
-            carry_over_assets(
-                session,
-                parent_version_id=parent.id,
-                child_version_id=child.id,
-                state=state,
-                scope=scope,
-                planned=planned,
-                target_id=target_id,
-            )
+        carry_over_assets(
+            session,
+            parent_version_id=parent.id,
+            child_version_id=child.id,
+            state=state,
+            scope=scope,
+            planned=planned,
+            target_id=target_id,
+        )
 
-        child.state_json["version_id"] = child.id
-        child.state_json["regen"] = {
-            "scope": scope.value,
-            "target_stage": target_stage.value,
-            "target_id": target_id,
-            "instruction_delta": directive.instruction_delta,
-        }
+        child.state_json = prepare_regeneration_state(
+            parent.state_json,
+            child_version_id=child.id,
+            scope=scope,
+            target_stage=target_stage,
+            target_id=target_id,
+            instruction_delta=directive.instruction_delta,
+        )
 
         feedback.directive_json = directive.model_dump()
         feedback.resulting_version_id = child.id
         feedback.status = FeedbackStatus.APPLIED
         feedback.error = None
-        story = session.get(Story, story_id)
-        if story:
-            story.current_version_id = child.id
-            story.status = StoryStatus.GENERATING
+        story.current_version_id = child.id
+        story.status = StoryStatus.GENERATING
         session.commit()
         new_version_id = child.id
 
