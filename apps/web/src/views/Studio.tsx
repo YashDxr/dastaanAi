@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { AppHeader } from '../components/AppHeader'
+import { AlternateEndings } from '../components/AlternateEndings'
 import { AudioPlayer } from '../components/AudioPlayer'
 import { FeedbackComposer } from '../components/FeedbackComposer'
 import { ProgressStepper } from '../components/ProgressStepper'
@@ -310,6 +311,14 @@ export function Studio({ user, storyId, onLogout, onHome, onCompose }: Props) {
                   onSelectBaseVersion={selectBaseVersion}
                   onCreateBranch={branchFromScene}
                 />
+                {detail.story.status === 'ready' && (
+                  <AlternateEndings
+                    storyId={storyId}
+                    state={state}
+                    disabled={busy || regenerating}
+                    onRequested={refresh}
+                  />
+                )}
                 <FeedbackComposer
                   disabled={busy || regenerating}
                   interpreting={interpreting}

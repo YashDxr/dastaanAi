@@ -727,6 +727,7 @@
 .progress-panel,
 .player,
 .script-panel,
+.alternate-endings-panel,
 .feedback-panel,
 .cast-panel,
 .scenes-panel,
@@ -749,6 +750,7 @@
 .progress-top h2,
 .player h2,
 .script-panel h2,
+.alternate-endings-panel h2,
 .feedback-panel h2 {
   font-family: var(--display);
   font-size: 1.45rem;
@@ -1284,6 +1286,72 @@
   padding: 0.62rem 0.8rem;
 }
 
+/* Alternate endings ---------------------------------------------------- */
+
+.alternate-endings-panel > .muted {
+  margin: 0.55rem 0 0;
+  font-size: 0.92rem;
+  line-height: 1.5;
+}
+
+.alternate-endings-list {
+  list-style: none;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.6rem;
+  padding: 0;
+  margin: 1rem 0 0;
+}
+
+.alternate-ending-choice {
+  width: 100%;
+  min-height: 7.2rem;
+  text-align: left;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #fff;
+  color: var(--ink);
+  padding: 0.8rem;
+  font: inherit;
+  cursor: pointer;
+  transition: border-color 0.2s var(--ease), background 0.2s var(--ease), transform 0.2s var(--ease);
+}
+
+.alternate-ending-choice:hover:not(:disabled),
+.alternate-ending-choice:focus-visible {
+  border-color: var(--teal);
+  background: color-mix(in srgb, var(--teal) 6%, #fff);
+  transform: translateY(-1px);
+}
+
+.alternate-ending-choice:disabled {
+  cursor: not-allowed;
+  opacity: 0.58;
+}
+
+.alternate-ending-choice span,
+.alternate-ending-choice small {
+  display: block;
+}
+
+.alternate-ending-choice span {
+  color: var(--teal-deep);
+  font-weight: 600;
+}
+
+.alternate-ending-choice small {
+  margin-top: 0.35rem;
+  color: var(--ink-soft);
+  font-size: 0.8rem;
+  line-height: 1.4;
+}
+
+.alternate-endings-status {
+  margin: 0.75rem 0 0;
+  color: var(--ink-soft);
+  font-size: 0.84rem;
+}
+
 /* Scenes tab ------------------------------------------------------------ */
 
 .scene-gallery {
@@ -1542,6 +1610,14 @@
 
   .studio-head {
     flex-direction: column;
+  }
+
+  .alternate-endings-list {
+    grid-template-columns: 1fr;
+  }
+
+  .alternate-ending-choice {
+    min-height: 0;
   }
 }
 

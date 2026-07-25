@@ -132,6 +132,12 @@ A regeneration runs the same chain built from a shorter slice of the stage
 registry. "Make line 12 angrier" re-runs emotion tagging for that one line, its
 TTS, and assembly - three steps, not thirty.
 
+Finished stories also expose three **alternate ending** choices in the listener
+studio. Each choice forks a normal child `StoryVersion` at the penultimate scene
+and re-enters at `story_understanding`, so every later scene, line, asset, and
+mix stays consistent with the new decision while the parent version remains
+unchanged.
+
 Progress reaches the browser over SSE (`GET /api/stories/{id}/events`) fed by
 Redis pub/sub, with `GET /api/stories/{id}/jobs` as the polling fallback while
 the stream is down. The WebSocket at `/ws/stories/{id}` is still served for
