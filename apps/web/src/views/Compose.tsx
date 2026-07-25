@@ -20,6 +20,7 @@ type Props = {
 export function Compose({ user, onLogout, onHome, onCreated }: Props) {
   const [text, setText] = useState('')
   const [genre, setGenre] = useState('')
+  const [outputFormat, setOutputFormat] = useState<'audio' | 'video' | 'both'>('audio')
   const [pending, setPending] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [imported, setImported] = useState<string | null>(null)
@@ -71,7 +72,7 @@ export function Compose({ user, onLogout, onHome, onCreated }: Props) {
             setPending(true)
             setError(null)
             void storiesApi
-              .create(text.trim(), genre.trim() || undefined)
+              .create(text.trim(), genre.trim() || undefined, outputFormat)
               .then((res) => onCreated(res.story_id))
               .catch((err) => setError(formatError(err)))
               .finally(() => setPending(false))
@@ -112,6 +113,28 @@ export function Compose({ user, onLogout, onHome, onCreated }: Props) {
               maxLength={60}
             />
           </label>
+
+          <div className="format-selector-group">
+            <label className="compose-label slim">
+              Output format
+            </label>
+            <div className="format-selector">
+              {(['audio', 'video', 'both'] as const).map((fmt) => (
+                <button
+                  key={fmt}
+                  type="button"
+                  className={`chip${outputFormat === fmt ? ' active' : ''}`}
+                  onClick={() => setOutputFormat(fmt)}
+                  disabled={pending}
+                >
+                  {fmt === 'audio' ? 'Audio only' : fmt === 'video' ? 'Video' : 'Both'}
+                </button>
+              ))}
+            </div>
+            {outputFormat !== 'audio' && (
+              <p className="format-hint">Video adds scene artwork — uses more credits.</p>
+            )}
+          </div>
 
           {error && <p className="form-error">{error}</p>}
 
