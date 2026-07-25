@@ -38,10 +38,10 @@ export const auth = {
 export const stories = {
   list: () => apiFetch<Story[]>('/stories'),
   get: (id: string) => apiFetch<StoryDetail>(`/stories/${id}`),
-  create: (raw_text: string, genre_hint?: string, output_format?: string) =>
+  create: (raw_text: string, genre_hint?: string, output_format?: string, language?: string) =>
     apiFetch<DispatchAccepted>('/stories', {
       method: 'POST',
-      body: JSON.stringify({ raw_text, genre_hint: genre_hint || null, output_format: output_format || 'audio' }),
+      body: JSON.stringify({ raw_text, genre_hint: genre_hint || null, output_format: output_format || 'audio', language: language || 'en' }),
     }),
   progress: (id: string) => apiFetch<Progress>(`/stories/${id}/jobs`),
   feedback: (id: string, raw_text: string) =>

@@ -14,6 +14,7 @@ import shutil
 import subprocess
 import tempfile
 from dataclasses import dataclass
+from functools import lru_cache
 from pathlib import Path
 
 import structlog
@@ -331,6 +332,28 @@ _DRAWTEXT_FONT = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
 _DRAWTEXT_WRAP = 45
 
 
+@lru_cache(maxsize=32)
+def _resolve_font(language: str) -> str:
+    """Find the best font for a given language via fontconfig.
+
+    ``fc-match`` picks the installed font whose coverage best matches the
+    script used by *language*.  The result is cached for the process
+    lifetime, so the subprocess runs at most once per language.
+    """
+    try:
+        result = subprocess.run(  # noqa: S603
+            ["fc-match", "-f", "%{file}", f":lang={language}"],
+            capture_output=True, text=True, timeout=5,
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            found = result.stdout.strip()
+            log.debug("font_resolved", language=language, font=found)
+            return found
+    except Exception:
+        log.warning("font_resolution_failed", language=language, exc_info=True)
+    return _DRAWTEXT_FONT
+
+
 def _wrap_text(text: str, width: int = _DRAWTEXT_WRAP) -> str:
     """Wrap text at word boundaries to fit within width characters."""
     words = text.split()
@@ -379,7 +402,7 @@ _ZOOM_PRESETS: list[tuple[str, str, str]] = [
 ]
 
 
-def compose_video(audio: bytes, scene_frames: list[SceneFrame]) -> bytes:
+def compose_video(audio: bytes, scene_frames: list[SceneFrame], *, language: str = "en") -> bytes:
     """Combine a final audio track with scene images into an MP4 video.
 
     Each image gets a Ken Burns zoompan effect. When there are multiple frames,
@@ -389,6 +412,8 @@ def compose_video(audio: bytes, scene_frames: list[SceneFrame]) -> bytes:
     """
     if not scene_frames:
         raise AssemblyError("cannot compose video with no scene frames")
+
+    font_path = _resolve_font(language)
 
     with tempfile.TemporaryDirectory(prefix="daastaan-vid-") as tmp:
         workdir = Path(tmp)
@@ -433,9 +458,10 @@ def compose_video(audio: bytes, scene_frames: list[SceneFrame]) -> bytes:
                 txt_path.write_text(caption, encoding="utf-8")
                 escaped_path = _escape_textfile_path(str(txt_path))
                 df_out = f"df{idx}"
+                escaped_font = _escape_textfile_path(font_path)
                 filters.append(
                     f"[{zp_out}]drawtext=textfile={escaped_path}"
-                    f":fontfile={_DRAWTEXT_FONT}"
+                    f":fontfile={escaped_font}"
                     f":fontsize=28:fontcolor=white:borderw=2:bordercolor=black"
                     f":x=(w-text_w)/2:y=h-th-50"
                     f":box=1:boxcolor=black@0.5:boxborderw=8[{df_out}]"
