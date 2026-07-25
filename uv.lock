@@ -8,6 +8,7 @@ members = [
     "daastaan-api",
     "daastaan-common",
     "daastaan-contracts",
+    "daastaan-music",
     "daastaan-workspace",
 ]
 
@@ -336,6 +337,7 @@ dependencies = [
     { name = "daastaan-contracts" },
     { name = "fastapi" },
     { name = "flower" },
+    { name = "httpx" },
     { name = "langchain-core" },
     { name = "langchain-openai" },
     { name = "langfuse" },
@@ -352,6 +354,7 @@ requires-dist = [
     { name = "daastaan-contracts", editable = "packages/contracts" },
     { name = "fastapi", specifier = ">=0.121.0" },
     { name = "flower", specifier = ">=2.0.1" },
+    { name = "httpx", specifier = ">=0.28.0" },
     { name = "langchain-core", specifier = ">=1.0.0" },
     { name = "langchain-openai", specifier = ">=1.0.0" },
     { name = "langfuse", specifier = ">=3.9.0" },
@@ -434,6 +437,25 @@ dependencies = [
 requires-dist = [{ name = "pydantic", specifier = ">=2.11.0" }]
 
 [[package]]
+name = "daastaan-music"
+version = "0.1.0"
+source = { editable = "services/music" }
+dependencies = [
+    { name = "fastapi" },
+    { name = "pydantic" },
+    { name = "pydantic-settings" },
+    { name = "uvicorn", extra = ["standard"] },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "fastapi", specifier = ">=0.121.0" },
+    { name = "pydantic", specifier = ">=2.11.0" },
+    { name = "pydantic-settings", specifier = ">=2.11.0" },
+    { name = "uvicorn", extras = ["standard"], specifier = ">=0.38.0" },
+]
+
+[[package]]
 name = "daastaan-workspace"
 version = "0.1.0"
 source = { virtual = "." }
@@ -444,6 +466,7 @@ dev = [
     { name = "daastaan-api" },
     { name = "daastaan-common" },
     { name = "daastaan-contracts" },
+    { name = "daastaan-music" },
     { name = "httpx" },
     { name = "mypy" },
     { name = "pytest" },
@@ -459,6 +482,7 @@ dev = [
     { name = "daastaan-api", editable = "services/api" },
     { name = "daastaan-common", editable = "packages/common" },
     { name = "daastaan-contracts", editable = "packages/contracts" },
+    { name = "daastaan-music", editable = "services/music" },
     { name = "httpx", specifier = ">=0.28.0" },
     { name = "mypy", specifier = ">=1.18.0" },
     { name = "pytest", specifier = ">=8.4.0" },

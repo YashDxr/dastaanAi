@@ -5,6 +5,7 @@ TTS calls:
 
     celery -A daastaan_agent.worker worker -Q agents   -c 4
     celery -A daastaan_agent.worker worker -Q media    -c 6
+    celery -A daastaan_agent.worker worker -Q music    -c 1
     celery -A daastaan_agent.worker worker -Q assembly -c 1
 
 Media concurrency is the per-line TTS fan-out width. Assembly stays at 1 because

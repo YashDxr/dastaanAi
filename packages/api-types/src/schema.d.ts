@@ -472,6 +472,47 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/observability/jobs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Observability Jobs */
+        get: operations["observability_jobs_api_observability_jobs_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/settings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Settings
+         * @description No user-preferences table exists yet, so this is a non-persistent default.
+         */
+        get: operations["get_settings_api_settings_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Preview Settings
+         * @description Echo settings for a live preview; intentionally does not write to the DB.
+         */
+        patch: operations["preview_settings_api_settings_patch"];
+        trace?: never;
+    };
     "/api/stories/{story_id}/events": {
         parameters: {
             query?: never;
@@ -613,6 +654,17 @@ export interface components {
             raw_text: string;
             /** Genre Hint */
             genre_hint?: string | null;
+            /**
+             * Language
+             * @default en
+             */
+            language: string;
+            /**
+             * Output Format
+             * @default audio
+             * @enum {string}
+             */
+            output_format: "audio" | "video" | "both";
         };
         /** DailySpendOut */
         DailySpendOut: {
@@ -891,7 +943,7 @@ export interface components {
          * @description Blast radius of a regeneration request.
          * @enum {string}
          */
-        Scope: "line" | "character" | "scene" | "full_story";
+        Scope: "line" | "character" | "scene" | "music" | "full_story";
         /** SignupRequest */
         SignupRequest: {
             /**
@@ -908,7 +960,7 @@ export interface components {
          *     them as a wire format: renaming one is a breaking change.
          * @enum {string}
          */
-        StageName: "mood_classification" | "story_understanding" | "character_registry" | "dialogue_attribution" | "emotion_tagging" | "narrator_persona" | "voice_assignment" | "tts_synthesis" | "image_generation" | "assembly";
+        StageName: "mood_classification" | "story_understanding" | "character_registry" | "dialogue_attribution" | "emotion_tagging" | "narrator_persona" | "voice_assignment" | "tts_synthesis" | "image_generation" | "music_generation" | "assembly" | "video_composition";
         /** StoryDetailOut */
         StoryDetailOut: {
             story: components["schemas"]["StoryOut"];
@@ -1768,6 +1820,87 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AuditLog"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    observability_jobs_api_observability_jobs_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+        };
+    };
+    get_settings_api_settings_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+        };
+    };
+    preview_settings_api_settings_patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    [key: string]: unknown;
+                };
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
                 };
             };
             /** @description Validation Error */

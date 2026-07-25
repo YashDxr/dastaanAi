@@ -38,6 +38,9 @@ export function ProgressStepper({ progress, interpreting = false }: Props) {
   const done = statuses.filter((s) => s === 'succeeded').length
   const pct = ready ? 100 : Math.round((done / stages.length) * 100)
   const failed = jobs.find((j) => j.status === 'failed')
+  const unavailableMusic = jobs.find(
+    (j) => j.stage === 'music_generation' && j.status === 'skipped' && j.error,
+  )
 
   const runningIndex = statuses.indexOf('running')
   const runningStage = runningIndex >= 0 ? stages[runningIndex] : null
@@ -128,6 +131,7 @@ export function ProgressStepper({ progress, interpreting = false }: Props) {
           {failed.error ?? 'A stage failed. Check your API key and try again.'}
         </p>
       )}
+      {unavailableMusic && <p className="progress-note">{unavailableMusic.error}</p>}
     </section>
   )
 }

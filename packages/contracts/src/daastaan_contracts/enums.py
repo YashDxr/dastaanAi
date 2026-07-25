@@ -14,6 +14,7 @@ class StageName(StrEnum):
     VOICE_ASSIGNMENT = "voice_assignment"
     TTS_SYNTHESIS = "tts_synthesis"
     IMAGE_GENERATION = "image_generation"
+    MUSIC_GENERATION = "music_generation"
     ASSEMBLY = "assembly"
     VIDEO_COMPOSITION = "video_composition"
 
@@ -24,6 +25,7 @@ class Scope(StrEnum):
     LINE = "line"
     CHARACTER = "character"
     SCENE = "scene"
+    MUSIC = "music"
     FULL_STORY = "full_story"
 
 

@@ -12,6 +12,7 @@ packages/common       Settings, database, object storage, logging, the Celery ap
 packages/api-types    TypeScript types generated from the API's OpenAPI schema.
 services/api          FastAPI: auth, stories, feedback, media streaming, admin.
 services/agent        LangGraph stages, TTS, images, ffmpeg assembly, Celery workers.
+services/music        Native macOS Stable Audio MLX sidecar (not a Docker model runtime).
 apps/web              Listener app (Vite + React), port 5173.
 apps/admin            Operator panel (Vite + React), port 5174.
 infra/docker          Shared Dockerfile for the API, agent, and all workers.
@@ -78,6 +79,15 @@ make worker         # one worker across all queues
 
 `make help` lists everything.
 
+### Local background music (Apple Silicon)
+
+The BGM model stays in a native macOS sidecar so its MLX runtime can access
+Metal; Docker workers call it over a signed private HTTP API. Start with
+`MUSIC_ENABLED=false`, then follow [the local music sidecar guide](docs/guides/local-music-sidecar.md).
+The feature flag and URL live in `.env`; copy `.env.music.example` to the
+gitignored `.env.music` for the credentials that Compose injects into
+`worker-music` only.
+
 ## How a generation flows
 
 ```
@@ -85,7 +95,8 @@ POST /api/stories
   -> chain(run_stage x 7)          sequential reasoning stages, queue: agents
   -> chord(
        group(tts_line x N,         one task per line,   queue: media
-             gen_image x M),       one task per scene,  queue: media
+             gen_image x M,        one task per scene,  queue: media
+             gen_music x 1),       one optional bed,    queue: music
        assemble)                   ffmpeg composition,  queue: assembly
 ```
 
