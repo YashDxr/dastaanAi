@@ -1,0 +1,1 @@
+export function PlayerControls({ playing, onToggle }: { playing: boolean; onToggle: () => void }) { return <div className="player-controls"><button aria-label="Rewind 15 seconds">↶ 15</button><button className="play" onClick={onToggle} aria-label={playing ? 'Pause' : 'Play'}>{playing ? 'Ⅱ' : '▶'}</button><button aria-label="Forward 15 seconds">15 ↷</button></div> }

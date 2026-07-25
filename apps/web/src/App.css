@@ -268,6 +268,37 @@
   font-size: 0.92rem;
 }
 
+.demo-access {
+  border-top: 1px solid var(--line);
+  margin-top: 0.35rem;
+  padding-top: 1rem;
+  text-align: left;
+}
+
+.demo-access > p:not(.eyebrow) {
+  color: var(--ink-soft);
+  font-size: 0.78rem;
+  line-height: 1.45;
+  margin: 0.35rem 0 0.75rem;
+}
+
+.credential {
+  align-items: center;
+  background: #f7faf9;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  display: grid;
+  gap: 0.45rem;
+  grid-template-columns: 62px 1fr auto;
+  margin-top: 0.45rem;
+  padding: 0.55rem 0.65rem;
+}
+
+.credential b { color: var(--ink-soft); font-size: 0.66rem; text-transform: uppercase; }
+.credential code { font-size: 0.72rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.credential button { background: transparent; border: 0; color: var(--teal-deep); cursor: pointer; font-weight: 700; padding: 0.15rem; }
+.demo-login { margin-top: 0.8rem; width: 100%; }
+
 .eyebrow {
   margin: 0;
   text-transform: uppercase;
