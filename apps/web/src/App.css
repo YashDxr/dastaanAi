@@ -827,6 +827,15 @@
   background: var(--ok);
 }
 
+.stage-chip.skipped .stage-trigger {
+  border-color: color-mix(in srgb, var(--line) 80%, var(--amber));
+  color: var(--ink-soft);
+}
+
+.stage-chip.skipped .stage-dot {
+  background: var(--ink-soft);
+}
+
 .stage-chip.failed .stage-trigger {
   border-color: color-mix(in srgb, var(--danger) 40%, var(--line));
   color: var(--danger);

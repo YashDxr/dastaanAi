@@ -3,7 +3,7 @@
 Orchestration shape:
 
     run_pipeline (single task, LangGraph in-process)
-        -> fan_out -> chord(group(tts, images), assemble)
+        -> fan_out -> chord(group(tts, images, optional music), assemble)
 
 The agent stages are executed sequentially (with stages 5+6 parallel) inside a
 single Celery task via LangGraph. This eliminates seven sequential broker
@@ -19,7 +19,14 @@ from typing import TYPE_CHECKING, Any
 import redis as redis_lib
 import structlog
 from celery import chain, chord, group
-from daastaan_common import carry_over_assets, celery_app, get_settings, get_store, ids, session_scope
+from daastaan_common import (
+    carry_over_assets,
+    celery_app,
+    get_settings,
+    get_store,
+    ids,
+    session_scope,
+)
 from daastaan_common.models import Feedback, IngestJob, MediaAsset, Story, StoryVersion
 from daastaan_contracts import (
     AssetKind,
@@ -50,6 +57,7 @@ from .assembly import (
     export_content_type,
     transcode,
 )
+
 # Safe to import eagerly: the module keeps pypdf, tesseract and PIL behind
 # function-local imports so the API and the non-ingest workers never load them.
 from .ingest import ExtractionError
@@ -58,6 +66,7 @@ if TYPE_CHECKING:
     from .ingest import Extraction as IngestExtraction
 from .gateway import PERMANENT_FAILURES, ModelGateway, ModerationBlocked
 from .graph import run_agent_stages
+from .music import MusicServiceClient, MusicServiceError, build_music_brief
 from .nodes import STAGE_NODES
 from .tracing import (
     clear_pipeline_context,
@@ -359,6 +368,125 @@ def gen_image(self, version_id: str, scene_id: str, user_id: str) -> str | None:
     return scene_id
 
 
+@celery_app.task(name=TaskName.GEN_MUSIC.value, bind=True)
+def gen_music(self, version_id: str, user_id: str) -> str | None:  # type: ignore[no-untyped-def]
+    """Generate one loopable instrumental bed through the private Mac sidecar.
+
+    This task intentionally does not use the generic autoretry decorator.  A
+    music host being asleep must degrade one story to narration-only output, not
+    fail the Celery chord or stall the rest of the media pipeline. The sidecar
+    persists an idempotent job, so an empty asset placeholder left by a worker
+    crash is deliberately reused on redelivery rather than treated as complete.
+    """
+    del user_id  # The local service has no user concept; it receives only a safe brief.
+    init_tracing()
+    dedupe = ids.dedupe_key(AssetKind.MUSIC_BED)
+    settings = get_settings()
+
+    with session_scope() as session:
+        state = repo.load_state(session, version_id)
+        job = repo.start_job(
+            session,
+            story_id=state.story_id,
+            version_id=version_id,
+            stage=StageName.MUSIC_GENERATION,
+        )
+        if not settings.music_enabled:
+            repo.finish_job(session, job, status=JobStatus.SKIPPED)
+            return None
+
+        existing = repo.find_asset(session, version_id=version_id, dedupe_key=dedupe)
+        if existing and existing.object_key:
+            repo.finish_job(session, job, status=JobStatus.SKIPPED)
+            return None
+
+        # `claim_asset()` commits an empty object_key before paid work starts.
+        # Keep that durable slot through worker loss: submitting the same
+        # idempotency key retrieves the sidecar job rather than launching a
+        # second MLX process. A concurrent claimant safely converges on it too.
+        claim = existing
+        if claim is None:
+            claim = repo.claim_asset(
+                session,
+                version_id=version_id,
+                kind=AssetKind.MUSIC_BED,
+                dedupe_key=dedupe,
+            )
+        if claim is None:
+            claim = repo.find_asset(session, version_id=version_id, dedupe_key=dedupe)
+        if claim is None:
+            repo.finish_job(session, job, status=JobStatus.SKIPPED)
+            return None
+
+        try:
+            brief = build_music_brief(state, settings)
+            idempotency_key = f"{version_id}:{dedupe}"
+            with MusicServiceClient(settings) as client:
+                generated = client.generate(idempotency_key=idempotency_key, brief=brief)
+                key = ids.object_key(version_id, AssetKind.MUSIC_BED, ext="wav")
+                get_store().put(key, generated.audio, "audio/wav")
+                # `record_asset` commits before the sidecar output is removed.
+                # If this worker dies before then, redelivery can download the
+                # same durable job and complete this storage transaction.
+                repo.record_asset(
+                    session,
+                    version_id=version_id,
+                    kind=AssetKind.MUSIC_BED,
+                    dedupe_key=dedupe,
+                    object_key=key,
+                    content_type="audio/wav",
+                    duration_ms=generated.duration_ms,
+                    instructions_used=brief.prompt[:500],
+                    size_bytes=len(generated.audio),
+                )
+                try:
+                    client.delete_job(generated.job_id)
+                except MusicServiceError:
+                    # A TTL sweeper on the Mac will reclaim this output. The
+                    # shared copy is already committed, so cleanup is optional.
+                    log.warning("music_sidecar_cleanup_failed", job_id=generated.job_id)
+            repo.finish_job(session, job, status=JobStatus.SUCCEEDED)
+            repo.publish(
+                state.story_id,
+                {
+                    "type": "asset",
+                    "kind": AssetKind.MUSIC_BED.value,
+                    "duration_ms": generated.duration_ms,
+                },
+            )
+            log.info(
+                "music_generated",
+                version_id=version_id,
+                job_id=generated.job_id,
+                duration_ms=generated.duration_ms,
+                seed=generated.seed,
+            )
+            return generated.job_id
+        except MusicServiceError as exc:
+            # The score is optional. Preserve the empty slot and the sidecar's
+            # idempotent job for a redelivery/retry, but make the user-visible
+            # stage neutral rather than falsely failing a playable episode.
+            public_error = "Background score unavailable; narration will continue."
+            repo.finish_job(session, job, status=JobStatus.SKIPPED, error=public_error)
+            repo.publish(
+                state.story_id,
+                {
+                    "type": "music_status",
+                    "status": "unavailable",
+                    "error": public_error,
+                },
+            )
+            log.warning("music_generation_degraded", version_id=version_id, error=str(exc))
+            return None
+        except Exception as exc:
+            # Storage, database, and programming failures are not optional.
+            # Let Celery report the real failure instead of silently delivering
+            # an episode whose durable media state is inconsistent.
+            repo.finish_job(session, job, status=JobStatus.FAILED, error=str(exc))
+            log.exception("music_generation_failed", version_id=version_id)
+            raise
+
+
 @celery_app.task(name=TaskName.ASSEMBLE.value, bind=True, **RETRY_KWARGS)
 def assemble(self, version_id: str, user_id: str) -> str:  # type: ignore[no-untyped-def]
     """Chord callback. Composes whatever audio exists.
@@ -398,7 +526,29 @@ def assemble(self, version_id: str, user_id: str) -> str:  # type: ignore[no-unt
             if missing:
                 log.warning("assembling_with_missing_clips", version_id=version_id, missing=missing)
 
-            episode = compose_episode(clips)
+            music_asset = session.exec(
+                select(MediaAsset).where(
+                    MediaAsset.version_id == version_id,
+                    MediaAsset.kind == AssetKind.MUSIC_BED.value,
+                    MediaAsset.object_key != "",
+                )
+            ).first()
+            music_bed = None
+            if music_asset is not None:
+                try:
+                    music_bed = store.get(music_asset.object_key)
+                except Exception:
+                    # A missing optional cue must never destroy a successfully
+                    # synthesised narration. The media worker will report the
+                    # BGM failure separately and the episode remains playable.
+                    log.warning(
+                        "music_asset_missing_during_assembly",
+                        version_id=version_id,
+                        asset_id=music_asset.id,
+                        exc_info=True,
+                    )
+
+            episode = compose_episode(clips, music_bed=music_bed)
             key = ids.object_key(version_id, AssetKind.FINAL_EPISODE, ext="mp3")
             store.put(key, episode, "audio/mpeg")
 
@@ -530,7 +680,13 @@ def compose_video_task(self, version_id: str, user_id: str) -> str:  # type: ign
 
 
 @celery_app.task(name="daastaan.pipeline.fan_out", bind=True)
-def fan_out(self, version_id: str, user_id: str, include_images: bool = True) -> str:  # type: ignore[no-untyped-def]
+def fan_out(
+    self,
+    version_id: str,
+    user_id: str,
+    include_images: bool = True,
+    include_music: bool | None = None,
+) -> str:  # type: ignore[no-untyped-def]
     """Expands the per-line and per-scene work into one chord.
 
     A chord rather than two groups so assembly runs exactly once, after both
@@ -540,14 +696,23 @@ def fan_out(self, version_id: str, user_id: str, include_images: bool = True) ->
     empty; on a regeneration it holds everything the fork carried over from the
     parent, so a one-line respeak enqueues one TTS task instead of one per line.
     """
+    settings = get_settings()
+    music_stage_requested = include_music is None or include_music
+    if include_music is None:
+        include_music = settings.music_enabled
+
     with session_scope() as session:
         state = repo.load_state(session, version_id)
-        existing = {
-            asset.dedupe_key
-            for asset in session.exec(
+        existing_assets = list(
+            session.exec(
                 select(MediaAsset).where(MediaAsset.version_id == version_id)
             ).all()
-        }
+        )
+        existing = {asset.dedupe_key for asset in existing_assets}
+        music_complete = any(
+            asset.dedupe_key == ids.dedupe_key(AssetKind.MUSIC_BED) and asset.object_key
+            for asset in existing_assets
+        )
         # Opened here, closed by `assemble`: neither stage has a task of its own
         # to report against, and without these rows the stepper can never pass 80%.
         repo.start_job(
@@ -562,6 +727,19 @@ def fan_out(self, version_id: str, user_id: str, include_images: bool = True) ->
                 story_id=state.story_id,
                 version_id=version_id,
                 stage=StageName.IMAGE_GENERATION,
+            )
+        if music_stage_requested and not settings.music_enabled:
+            music_job = repo.start_job(
+                session,
+                story_id=state.story_id,
+                version_id=version_id,
+                stage=StageName.MUSIC_GENERATION,
+            )
+            repo.finish_job(
+                session,
+                music_job,
+                status=JobStatus.SKIPPED,
+                error="Background score is disabled.",
             )
 
     if state.output_format in ("video", "both"):
@@ -578,6 +756,12 @@ def fan_out(self, version_id: str, user_id: str, include_images: bool = True) ->
             for scene in state.scenes[: limits.MAX_IMAGES_PER_STORY]
             if ids.dedupe_key(AssetKind.SCENE_IMAGE, scene_id=scene.id) not in existing
         ]
+    # A committed empty slot is a recoverable interrupted generation, not an
+    # asset. Re-submit it under the same sidecar idempotency key so it resumes
+    # safely instead of producing a permanent narration-only version.
+    music_missing = not music_complete
+    if include_music and settings.music_enabled and music_missing:
+        jobs.append(gen_music.si(version_id, user_id))
 
     if not jobs:
         assemble.si(version_id, user_id).apply_async(queue=Queue.ASSEMBLY.value)
@@ -723,9 +907,18 @@ def regenerate(  # type: ignore[no-untyped-def]
         for stage in planned
         if stage in STAGE_NODES
     ]
-    if StageName.TTS_SYNTHESIS in planned or StageName.IMAGE_GENERATION in planned:
+    if (
+        StageName.TTS_SYNTHESIS in planned
+        or StageName.IMAGE_GENERATION in planned
+        or StageName.MUSIC_GENERATION in planned
+    ):
         steps.append(
-            fan_out.si(version_id, user_id, StageName.IMAGE_GENERATION in planned)
+            fan_out.si(
+                version_id,
+                user_id,
+                StageName.IMAGE_GENERATION in planned,
+                StageName.MUSIC_GENERATION in planned,
+            )
         )
     else:
         steps.append(assemble.si(version_id, user_id))
@@ -1110,7 +1303,7 @@ def _fail_ingest(ingest_id: str, exc: Exception) -> None:
 def _resolve_target(state: StoryState, scope: Scope, target_id: str | None) -> str | None:
     """A target the model names must exist in the current state. Unknown ids are
     dropped rather than passed along."""
-    if scope is Scope.FULL_STORY or not target_id:
+    if scope in {Scope.FULL_STORY, Scope.MUSIC} or not target_id:
         return None
     lookup = {
         Scope.LINE: state.line_by_id,

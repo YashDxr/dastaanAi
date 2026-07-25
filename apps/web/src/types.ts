@@ -206,6 +206,7 @@ export const STAGE_LABELS: Record<string, string> = {
   voice_assignment: 'Voices',
   tts_synthesis: 'Speech',
   image_generation: 'Imagery',
+  music_generation: 'Score',
   assembly: 'Mix',
 }
 
@@ -228,6 +229,8 @@ export const STAGE_DESCRIPTIONS: Record<string, string> = {
   tts_synthesis:
     'Records every line with its assigned voice and emotion. This is the longest stage.',
   image_generation: 'Paints cover artwork for each scene.',
+  music_generation:
+    'Writes one subtle instrumental bed beneath the narration. If the private music Mac is offline, the episode still finishes without it.',
   assembly:
     'Stitches the recorded lines together with pacing and pauses into the final episode.',
 }

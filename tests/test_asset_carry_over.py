@@ -101,4 +101,11 @@ class TestFullStory:
         stale = _invalidated(state, Scope.FULL_STORY, StageName.MOOD_CLASSIFICATION, None)
         expected = {f"line_audio:line_{i:04d}" for i in range(4)}
         expected |= {f"scene_image:scene_{i:02d}" for i in range(2)}
+        expected.add("music_bed:single")
         assert stale == expected
+
+
+class TestMusicScope:
+    def test_music_only_drops_the_bed_not_narration_or_images(self, state):
+        stale = _invalidated(state, Scope.MUSIC, StageName.MUSIC_GENERATION, None)
+        assert stale == {"music_bed:single"}

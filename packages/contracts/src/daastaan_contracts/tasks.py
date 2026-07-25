@@ -13,6 +13,7 @@ from .enums import StageName
 class Queue(StrEnum):
     AGENTS = "agents"
     MEDIA = "media"
+    MUSIC = "music"
     ASSEMBLY = "assembly"
 
 
@@ -21,6 +22,7 @@ class TaskName(StrEnum):
     RUN_STAGE = "daastaan.stage.run"
     TTS_LINE = "daastaan.media.tts_line"
     GEN_IMAGE = "daastaan.media.gen_image"
+    GEN_MUSIC = "daastaan.music.generate"
     ASSEMBLE = "daastaan.assembly.compose"
     INTERPRET_FEEDBACK = "daastaan.feedback.interpret"
     REGENERATE = "daastaan.pipeline.regenerate"
@@ -39,6 +41,7 @@ STAGE_QUEUE: dict[StageName, Queue] = {
     StageName.VOICE_ASSIGNMENT: Queue.AGENTS,
     StageName.TTS_SYNTHESIS: Queue.MEDIA,
     StageName.IMAGE_GENERATION: Queue.MEDIA,
+    StageName.MUSIC_GENERATION: Queue.MUSIC,
     StageName.ASSEMBLY: Queue.ASSEMBLY,
     StageName.VIDEO_COMPOSITION: Queue.ASSEMBLY,
 }

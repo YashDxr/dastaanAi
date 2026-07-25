@@ -9,7 +9,9 @@ export UV_PROJECT_ENVIRONMENT
 # DB name matches the DBeaver database on this machine (dastaanai).
 LOCAL_ENV := DATABASE_URL=postgresql+psycopg://yashsingh@localhost:5432/dastaanai \
              REDIS_URL=redis://localhost:6379/0 \
-             LOCAL_MEDIA_DIR=./.media
+             LOCAL_MEDIA_DIR=./.media \
+             MUSIC_SERVICE_BASE_URL=http://127.0.0.1:8787 \
+             MUSIC_CLIENT_ENABLED=true
 
 # Read POSTGRES_MODE from .env (default docker). host = skip Compose Postgres.
 POSTGRES_MODE := $(shell sed -n 's/^POSTGRES_MODE=//p' .env 2>/dev/null | tail -1)
@@ -107,6 +109,10 @@ logs-worker-agents: ## Tail agents-queue worker logs
 logs-worker-media: ## Tail media-queue worker logs
 	docker compose logs -f --tail=200 worker-media
 
+.PHONY: logs-worker-music
+logs-worker-music: ## Tail local-music queue worker logs
+	docker compose logs -f --tail=200 worker-music
+
 .PHONY: logs-worker-assembly
 logs-worker-assembly: ## Tail assembly-queue worker logs
 	docker compose logs -f --tail=200 worker-assembly
@@ -135,8 +141,22 @@ agent: fix-pth ## Run the agent service with reload (needs: make infra)
 
 .PHONY: worker
 worker: fix-pth ## Run one worker across all queues (needs: make infra)
+	@set -a; test ! -f .env.music || . ./.env.music; set +a; \
 	$(LOCAL_ENV) uv run --no-sync celery -A daastaan_agent.worker worker \
-		-Q agents,media,assembly -c 4 --loglevel info
+		-Q agents,media,music,assembly -c 4 --loglevel info
+
+.PHONY: music-service
+music-service: ## Run the native private Stable Audio MLX sidecar on this Mac
+	uv run --package daastaan-music uvicorn --factory daastaan_music.main:create_app \
+		--host 127.0.0.1 --port 8787
+
+.PHONY: music-test
+music-test: ## Run isolated music-sidecar and agent-boundary tests
+	uv run --package daastaan-music pytest -q tests/test_music_service.py tests/test_music_client.py tests/test_music_settings.py
+
+.PHONY: music-smoke
+music-smoke: ## Submit, download, validate, and remove one real music-service job
+	uv run --no-sync python scripts/music_smoke.py
 
 .PHONY: web
 web: ## Run the listener app on :5173

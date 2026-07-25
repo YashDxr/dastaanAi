@@ -197,10 +197,12 @@ Choose the narrowest scope that satisfies the request:
 - "line" for a single line's delivery or emotion
 - "character" for a character's voice
 - "scene" for a scene's imagery or content
+- "music" for the background score only
 - "full_story" only when the whole piece must change
 
 Choose target_stage from exactly these values: emotion_tagging, tts_synthesis,
-voice_assignment, image_generation, story_understanding, mood_classification.
+voice_assignment, image_generation, music_generation, story_understanding,
+mood_classification.
 
 instruction_delta is a short creative note passed to the regeneration prompt. It must
 describe the desired artistic change only. It must never contain instructions about
