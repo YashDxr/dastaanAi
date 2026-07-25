@@ -131,6 +131,19 @@ class JobOut(BaseModel):
     finished_at: datetime | None
 
 
+class StageProgressOut(BaseModel):
+    """How far through a fan-out stage this run is.
+
+    The same numbers the `stage_progress` event carries, recomputed from
+    `media_assets` so the polling fallback agrees with the live stream instead of
+    dropping back to an all-or-nothing stage chip when the stream is unavailable.
+    """
+
+    stage: str
+    completed: int
+    total: int
+
+
 class ProgressOut(BaseModel):
     story_id: str
     version_id: str | None
@@ -140,6 +153,8 @@ class ProgressOut(BaseModel):
     # show completion against the right denominator.
     planned_stages: list[str]
     jobs: list[JobOut]
+    # Only the fan-out stages appear here, and only once their work is known.
+    stage_progress: list[StageProgressOut] = []
 
 
 # --- feedback and regeneration ---------------------------------------------

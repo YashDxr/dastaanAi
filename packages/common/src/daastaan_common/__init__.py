@@ -1,6 +1,6 @@
 """Shared infrastructure for the Daastaan services."""
 
-from . import cache
+from . import cache, events
 from .celery_app import celery_app, create_celery
 from .db import get_engine, get_session, init_db, session_scope
 from .logging import configure_logging
@@ -22,6 +22,7 @@ __all__ = [
     "create_celery",
     "current_request_id",
     "ensure_request_id",
+    "events",
     "get_engine",
     "get_session",
     "get_settings",

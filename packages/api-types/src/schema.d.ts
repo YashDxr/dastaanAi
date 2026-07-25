@@ -513,6 +513,58 @@ export interface paths {
         patch: operations["preview_settings_api_settings_patch"];
         trace?: never;
     };
+    "/api/ingest": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Upload */
+        post: operations["upload_api_ingest_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/ingest/{ingest_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Ingest */
+        get: operations["get_ingest_api_ingest__ingest_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/stories/{story_id}/exports": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Exports */
+        get: operations["list_exports_api_stories__story_id__exports_get"];
+        put?: never;
+        /** Create Export */
+        post: operations["create_export_api_stories__story_id__exports_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/stories/{story_id}/events": {
         parameters: {
             query?: never;
@@ -612,6 +664,11 @@ export interface components {
              */
             created_at?: string;
         };
+        /** Body_upload_api_ingest_post */
+        Body_upload_api_ingest_post: {
+            /** File */
+            file: string;
+        };
         /** CostRow */
         CostRow: {
             /** Label */
@@ -686,6 +743,41 @@ export interface components {
             /** Task Id */
             task_id: string;
         };
+        /** ExportFormatOut */
+        ExportFormatOut: {
+            /** Format */
+            format: string;
+            /** Ready */
+            ready: boolean;
+            /** Url */
+            url: string | null;
+            /** Size Bytes */
+            size_bytes: number | null;
+            /** Label */
+            label: string;
+            /** Content Type */
+            content_type: string;
+            /** Detail */
+            detail: string;
+            /** Recommended */
+            recommended: boolean;
+        };
+        /** ExportOut */
+        ExportOut: {
+            /** Format */
+            format: string;
+            /** Ready */
+            ready: boolean;
+            /** Url */
+            url: string | null;
+            /** Size Bytes */
+            size_bytes: number | null;
+        };
+        /** ExportRequest */
+        ExportRequest: {
+            /** Format */
+            format: string;
+        };
         /** FeedbackOut */
         FeedbackOut: {
             /** Id */
@@ -723,6 +815,38 @@ export interface components {
         HTTPValidationError: {
             /** Detail */
             detail?: components["schemas"]["ValidationError"][];
+        };
+        /** IngestAccepted */
+        IngestAccepted: {
+            /** Ingest Id */
+            ingest_id: string;
+            /** Filename */
+            filename: string;
+        };
+        /** IngestOut */
+        IngestOut: {
+            /** Id */
+            id: string;
+            /** Filename */
+            filename: string;
+            /** Status */
+            status: string;
+            /** Method */
+            method: string | null;
+            /** Page Count */
+            page_count: number | null;
+            /** Raw Chars */
+            raw_chars: number | null;
+            /** Cleaned Text */
+            cleaned_text: string | null;
+            /** Title Hint */
+            title_hint: string | null;
+            /** Genre Hint */
+            genre_hint: string | null;
+            /** Notes */
+            notes: string | null;
+            /** Error */
+            error: string | null;
         };
         /** JobOut */
         JobOut: {
@@ -776,6 +900,11 @@ export interface components {
             planned_stages: string[];
             /** Jobs */
             jobs: components["schemas"]["JobOut"][];
+            /**
+             * Stage Progress
+             * @default []
+             */
+            stage_progress: components["schemas"]["StageProgressOut"][];
         };
         /**
          * RegenerateRequest
@@ -961,6 +1090,22 @@ export interface components {
          * @enum {string}
          */
         StageName: "mood_classification" | "story_understanding" | "character_registry" | "dialogue_attribution" | "emotion_tagging" | "narrator_persona" | "voice_assignment" | "tts_synthesis" | "image_generation" | "music_generation" | "assembly" | "video_composition";
+        /**
+         * StageProgressOut
+         * @description How far through a fan-out stage this run is.
+         *
+         *     The same numbers the `stage_progress` event carries, recomputed from
+         *     `media_assets` so the polling fallback agrees with the live stream instead of
+         *     dropping back to an all-or-nothing stage chip when the stream is unavailable.
+         */
+        StageProgressOut: {
+            /** Stage */
+            stage: string;
+            /** Completed */
+            completed: number;
+            /** Total */
+            total: number;
+        };
         /** StoryDetailOut */
         StoryDetailOut: {
             story: components["schemas"]["StoryOut"];
@@ -1088,6 +1233,214 @@ export interface components {
              */
             created_at: string;
         };
+        /**
+         * AssetEvent
+         * @description One media artifact finished and is now fetchable.
+         */
+        AssetEvent: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            type: "asset";
+            kind: components["schemas"]["AssetKind"];
+            /**
+             * Line Id
+             * @default null
+             */
+            line_id: string | null;
+            /**
+             * Scene Id
+             * @default null
+             */
+            scene_id: string | null;
+            /**
+             * Duration Ms
+             * @default null
+             */
+            duration_ms: number | null;
+        };
+        /**
+         * AssetKind
+         * @enum {string}
+         */
+        AssetKind: "line_audio" | "scene_image" | "music_bed" | "final_episode" | "final_video" | "episode_export";
+        /**
+         * CompleteEvent
+         * @description The episode is playable. Terminal for a run.
+         */
+        CompleteEvent: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            type: "complete";
+            /** Version Id */
+            version_id: string;
+        };
+        /** FeedbackEvent */
+        FeedbackEvent: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            type: "feedback";
+            status: components["schemas"]["FeedbackStatus"];
+            /** Feedback Id */
+            feedback_id: string;
+            /**
+             * Error
+             * @default null
+             */
+            error: string | null;
+            /**
+             * Version Id
+             * @default null
+             */
+            version_id: string | null;
+            /** @default null */
+            scope: components["schemas"]["Scope"] | null;
+            /** @default null */
+            target_stage: components["schemas"]["StageName"] | null;
+            /**
+             * Target Id
+             * @default null
+             */
+            target_id: string | null;
+        };
+        /**
+         * FeedbackStatus
+         * @description Outcome of interpreting one piece of free-text feedback.
+         *
+         *     Interpretation can fail on a decision rather than an outage - moderation
+         *     refusing the text, or the model naming a stage that is not a legal entry
+         *     point - so the attempt needs a durable outcome the user can be shown.
+         * @enum {string}
+         */
+        FeedbackStatus: "pending" | "applied" | "failed";
+        /**
+         * HeartbeatEvent
+         * @description Proof of liveness during a quiet stretch.
+         *
+         *     SSE sends a comment line instead, which `EventSource` never surfaces; this
+         *     exists for the WebSocket path, where there is no comment syntax and a client
+         *     otherwise cannot tell idle from dead.
+         */
+        HeartbeatEvent: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            type: "heartbeat";
+        };
+        /**
+         * JobStatus
+         * @enum {string}
+         */
+        JobStatus: "pending" | "running" | "succeeded" | "failed" | "skipped";
+        /**
+         * MusicStatusEvent
+         * @description The score degraded without the episode failing.
+         */
+        MusicStatusEvent: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            type: "music_status";
+            /**
+             * Status
+             * @constant
+             */
+            status: "unavailable";
+            /** Error */
+            error: string;
+        };
+        /**
+         * StageEvent
+         * @description A stage changed status. The `jobs` table holds the same transition.
+         */
+        StageEvent: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            type: "stage";
+            stage: components["schemas"]["StageName"];
+            status: components["schemas"]["JobStatus"];
+            /**
+             * Error
+             * @default null
+             */
+            error: string | null;
+        };
+        /**
+         * StagePreviewEvent
+         * @description Content the model has produced so far, mid-call.
+         *
+         *     Emitted from the streaming structured-output parse, so the browser shows
+         *     characters and scene titles appearing while the stage is still running instead
+         *     of waiting for it to commit. `items` are display-ready strings and each is sent
+         *     at most once per stage: the client appends, it does not replace.
+         */
+        StagePreviewEvent: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            type: "stage_preview";
+            stage: components["schemas"]["StageName"];
+            /** Label */
+            label: string;
+            /** Items */
+            items?: string[];
+        };
+        /**
+         * StageProgressEvent
+         * @description Sub-stage progress for work that is a group of subtasks.
+         *
+         *     TTS and image generation fan out to one task per line and per scene. Without
+         *     this the stage sits at `running` for the entire multi-minute fan-out, which is
+         *     the largest single gap between what the pipeline is doing and what the user
+         *     can see.
+         *
+         *     `total` is how many subtasks this run actually enqueued, not how many lines the
+         *     story has: a regeneration that respeaks one line reports 1, not 40. `completed`
+         *     is read from a Redis counter, so it is accurate even though the publishers are
+         *     concurrent - but see the module docstring on ordering.
+         */
+        StageProgressEvent: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            type: "stage_progress";
+            stage: components["schemas"]["StageName"];
+            /** Completed */
+            completed: number;
+            /** Total */
+            total: number;
+        };
+        /**
+         * StageTokensEvent
+         * @description Output-token count for a stage still in flight.
+         *
+         *     A stage can run a long time with nothing display-worthy to show - a long arc
+         *     summary being drafted, for instance - and a UI with no signal during that
+         *     window looks stalled. Deliberately just a counter: the cheapest honest proof
+         *     that the model is still producing.
+         */
+        StageTokensEvent: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            type: "stage_tokens";
+            stage: components["schemas"]["StageName"];
+            /** Tokens */
+            tokens: number;
+        };
+        ProgressEvent: components["schemas"]["StageEvent"] | components["schemas"]["StageProgressEvent"] | components["schemas"]["StagePreviewEvent"] | components["schemas"]["StageTokensEvent"] | components["schemas"]["AssetEvent"] | components["schemas"]["MusicStatusEvent"] | components["schemas"]["FeedbackEvent"] | components["schemas"]["CompleteEvent"] | components["schemas"]["HeartbeatEvent"];
     };
     responses: never;
     parameters: never;
@@ -1496,7 +1849,9 @@ export interface operations {
     };
     stream_asset_api_media__asset_id__get: {
         parameters: {
-            query?: never;
+            query?: {
+                download?: boolean;
+            };
             header?: {
                 Range?: string | null;
             };
@@ -1914,7 +2269,71 @@ export interface operations {
             };
         };
     };
-    story_events_api_stories__story_id__events_get: {
+    upload_api_ingest_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "multipart/form-data": components["schemas"]["Body_upload_api_ingest_post"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IngestAccepted"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_ingest_api_ingest__ingest_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                ingest_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IngestOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_exports_api_stories__story_id__exports_get: {
         parameters: {
             query?: never;
             header?: never;
@@ -1931,7 +2350,74 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
+                    "application/json": components["schemas"]["ExportFormatOut"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_export_api_stories__story_id__exports_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                story_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ExportRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ExportOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    story_events_api_stories__story_id__events_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                story_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description A stream of progress events, one per SSE frame. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
                     "application/json": unknown;
+                    "text/event-stream": components["schemas"]["ProgressEvent"];
                 };
             };
             /** @description Validation Error */

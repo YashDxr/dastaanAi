@@ -24,6 +24,7 @@ from typing_extensions import TypedDict
 from . import repo
 from .gateway import ModelGateway
 from .nodes import STAGE_NODES
+from .stage_progress import stage_reporter
 from .tracing import get_pipeline_context, log_mlflow_stage
 
 log = structlog.get_logger(__name__)
@@ -100,6 +101,10 @@ def build_graph(user_id: str) -> Any:
                         version_id=story_state.version_id,
                         user_id=user_id,
                         story_id=story_state.story_id,
+                        # Wired here rather than inside each node: every reasoning
+                        # stage gets live previews without its node function having
+                        # to know that progress reporting exists.
+                        on_delta=stage_reporter(story_state.story_id, stage),
                     )
                     updated = node(session, story_state, gateway)
 

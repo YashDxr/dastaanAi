@@ -14,8 +14,11 @@ what makes three separate guarantees hold at once:
 
 import base64
 import tempfile
+import time
+from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path
-from typing import TypeVar
+from typing import Any, TypeVar
 
 import structlog
 from daastaan_common import cache, get_settings
@@ -80,6 +83,33 @@ class ModerationBlocked(RuntimeError):
         self.categories = categories
 
 
+@dataclass(frozen=True)
+class StreamedDelta:
+    """One observation of a structured completion that is still being generated.
+
+    `parsed` is the response schema filled in as far as the model has got: complete
+    entries for the fields it has finished, absent or partial for the rest. It is
+    `None` until enough JSON has arrived to parse a prefix at all.
+
+    `tokens` is a *rough* count derived from the response text so far, and exists
+    only to drive a liveness indicator. It is deliberately not what the cost ledger
+    records - that uses the usage figures the API reports when the call ends.
+    """
+
+    parsed: Any | None
+    tokens: int
+
+
+# How often a caller's `on_delta` may run. Model tokens arrive far faster than a
+# progress bus should be written to: a 900-token stage would be nearly a thousand
+# Redis publishes unthrottled. Fast enough to feel live, slow enough to be cheap.
+_DELTA_MIN_INTERVAL_S = 0.2
+
+# Tokens are roughly four characters of JSON. Only ever used for the liveness
+# counter above, never for billing.
+_CHARS_PER_TOKEN = 4
+
+
 class ModelGateway:
     def __init__(
         self,
@@ -90,11 +120,16 @@ class ModelGateway:
         user_id: str | None = None,
         story_id: str | None = None,
         bypass_cache: bool = False,
+        on_delta: Callable[["StreamedDelta"], None] | None = None,
     ) -> None:
         self.session = session
         self.stage = stage
         self.version_id = version_id
         self.user_id = user_id
+        # Where mid-call progress goes, supplied by whoever is running this stage.
+        # A plain callback rather than anything story-shaped: this class has no
+        # business knowing that progress is published, only that someone wants it.
+        self.on_delta = on_delta
         # Recorded on cache entries so an operator can tell what a hashed key
         # belongs to. It is never part of a cache key: the cache is global by
         # design, and keying on the story would make every hit impossible.
@@ -198,14 +233,28 @@ class ModelGateway:
         user_content: str,
         kind: str = "light",
         temperature: float = 0.7,
+        on_delta: Callable[[StreamedDelta], None] | None = None,
     ) -> T:
-        """Strict-schema completion.
+        """Strict-schema completion, streamed.
 
         `system` holds our fixed instructions and `user_content` holds untrusted
         text. They are separate message roles on purpose: nothing a user writes is
         ever interpolated into the instruction string.
+
+        The response is streamed whether or not anyone is watching, so there is a
+        single code path to reason about; the return value and the ledger row are
+        identical either way. `on_delta` - or the one given to the constructor, which
+        is how the pipeline wires this without every node opting in - receives the
+        partially-parsed schema at most every `_DELTA_MIN_INTERVAL_S`, plus one final
+        call with the completed object so a consumer never misses whatever arrived in
+        the last few tokens.
+
+        A raising `on_delta` must not lose a paid completion, so callbacks are
+        isolated: reporting progress is strictly less important than returning the
+        result that was just paid for.
         """
         model = self._resolve_model(kind)
+        report = on_delta or self.on_delta
         # The schema is part of the key, so tightening a model's fields
         # invalidates its old entries instead of failing to parse them.
         key = cache.digest(
@@ -220,6 +269,8 @@ class ModelGateway:
                 except ValidationError:
                     log.warning("cache_entry_unusable", stage=self.stage, model=model)
                 else:
+                    # No deltas on a hit, and none are wanted: there is no
+                    # generation to watch, and the stage completes immediately.
                     self._record_cache_hit(model=model)
                     return parsed_hit
 
@@ -227,7 +278,7 @@ class ModelGateway:
             name=f"structured:{self.stage}",
             metadata=trace_metadata(stage=self.stage, model=model),
         ) as span:
-            completion = self.client.chat.completions.parse(
+            with self.client.chat.completions.stream(
                 model=model,
                 messages=[
                     {"role": "system", "content": system},
@@ -235,7 +286,14 @@ class ModelGateway:
                 ],
                 response_format=schema,
                 temperature=temperature,
-            )
+                # Streaming omits the usage object unless it is asked for, and
+                # without it every reasoning call would land in the ledger as an
+                # estimate. The budget dashboard is only trustworthy while these
+                # are real counts.
+                stream_options={"include_usage": True},
+            ) as stream:
+                self._consume_deltas(stream, report)
+                completion = stream.get_final_completion()
 
             usage = completion.usage
             input_tokens = usage.prompt_tokens if usage else 0
@@ -259,6 +317,59 @@ class ModelGateway:
 
         cache.put_llm(key, parsed.model_dump(mode="json"), source=self._source(model, user_content))
         return parsed
+
+    def _consume_deltas(
+        self, stream: Any, on_delta: Callable[[StreamedDelta], None] | None
+    ) -> None:
+        """Drain a structured stream, forwarding throttled snapshots to `on_delta`.
+
+        The stream has to be drained regardless of whether anyone is listening -
+        that is what produces the final completion - so the no-listener case is
+        just the loop without the reporting.
+        """
+        last_report = 0.0
+        latest: StreamedDelta | None = None
+        # Whether `latest` is a delta the throttle held back rather than delivered.
+        withheld = False
+
+        for event in stream:
+            if event.type != "content.delta":
+                continue
+            latest = StreamedDelta(
+                parsed=event.parsed,
+                tokens=len(event.snapshot) // _CHARS_PER_TOKEN,
+            )
+            if on_delta is None:
+                continue
+            now = time.monotonic()
+            if now - last_report < _DELTA_MIN_INTERVAL_S:
+                withheld = True
+                continue
+            last_report = now
+            withheld = False
+            self._safe_delta(on_delta, latest)
+
+        # The throttle usually swallows the last delta, which is the one holding the
+        # finished object, so it is flushed here - a consumer should see every field
+        # rather than everything bar the tail. Only when it was actually withheld:
+        # re-delivering a delta already sent would report a short stream twice.
+        if on_delta is not None and latest is not None and withheld:
+            self._safe_delta(on_delta, latest)
+
+    def _safe_delta(
+        self, on_delta: Callable[[StreamedDelta], None], delta: StreamedDelta
+    ) -> None:
+        """Run a progress callback without letting it break the call.
+
+        A failure here means the user's progress bar misses a frame. Letting it
+        propagate would instead discard a completion that has already been paid
+        for, and - because the exception would surface from inside the retry
+        decorator - potentially pay for it again.
+        """
+        try:
+            on_delta(delta)
+        except Exception:
+            log.warning("stream_delta_callback_failed", stage=self.stage, exc_info=True)
 
     @_RETRY
     def moderate(self, text: str) -> None:
