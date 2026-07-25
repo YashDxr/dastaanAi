@@ -99,22 +99,18 @@ class TestSceneScope:
 class TestFullStory:
     def test_keeps_nothing(self, state):
         stale = _invalidated(state, Scope.FULL_STORY, StageName.MOOD_CLASSIFICATION, None)
-        # Line audio: one per dialogue line.
-        assert stale >= {f"line_audio:line_{i:04d}" for i in range(4)}
-        # Scene images: at minimum the per-scene and per-line keys; may also include
-        # shot-type variants (scene_00:wide, scene_00:mid, …) added by later commits.
-        assert "scene_image:scene_00" in stale
-        assert "scene_image:scene_01" in stale
-        # Music bed is always invalidated on a full rewrite.
-        assert "music_bed:single" in stale
-        # Nothing else should survive a full-story regeneration.
-        unexpected = stale - {
-            k for k in stale
-            if k.startswith("line_audio:")
-            or k.startswith("scene_image:")
-            or k == "music_bed:single"
-        }
-        assert not unexpected, f"unexpected dedupe keys in full-story invalidation: {unexpected}"
+        expected = {f"line_audio:line_{i:04d}" for i in range(4)}
+        # Base scene keys, per-shot-type variants, and per-line keys (video mode).
+        # invalidated_dedupe_keys generates all three so a carry-over never leaks an
+        # old artifact into a fresh run regardless of which generation path was used.
+        for i in range(2):
+            expected.add(f"scene_image:scene_{i:02d}")
+            for tag in ("wide", "mid", "close"):
+                expected.add(f"scene_image:scene_{i:02d}:{tag}")
+        # All four lines are in scene_00 so they all fall inside the invalidated set.
+        expected |= {f"scene_image:line_{i:04d}" for i in range(4)}
+        expected.add("music_bed:single")
+        assert stale == expected
 
 
 class TestMusicScope:

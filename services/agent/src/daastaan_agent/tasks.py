@@ -22,6 +22,7 @@ from celery import chain, chord, group
 from daastaan_common import (
     carry_over_assets,
     celery_app,
+    events,
     get_settings,
     get_store,
     ids,
@@ -29,13 +30,18 @@ from daastaan_common import (
 )
 from daastaan_common.models import Feedback, IngestJob, MediaAsset, Story, StoryVersion
 from daastaan_contracts import (
+    AssetEvent,
     AssetKind,
+    CompleteEvent,
+    FeedbackEvent,
     FeedbackStatus,
     IngestStatus,
     JobStatus,
+    MusicStatusEvent,
     Queue,
     Scope,
     StageName,
+    StageProgressEvent,
     StoryState,
     StoryStatus,
     TaskName,
@@ -43,7 +49,7 @@ from daastaan_contracts import (
     limits,
     plan_stages,
 )
-from sqlmodel import select
+from sqlmodel import Session, select
 
 from . import prompts, repo
 from .assembly import (
@@ -66,10 +72,13 @@ from .ingest import ExtractionError
 
 if TYPE_CHECKING:
     from .ingest import Extraction as IngestExtraction
+from openai import BadRequestError, OpenAIError
+
 from .gateway import PERMANENT_FAILURES, ModelGateway, ModerationBlocked
 from .graph import run_agent_stages
 from .music import MusicServiceClient, MusicServiceError, build_music_brief
 from .nodes import STAGE_NODES
+from .stage_progress import stage_reporter
 from .tracing import (
     clear_pipeline_context,
     end_mlflow_run,
@@ -141,6 +150,51 @@ def _mark_story(session: Any, story_id: str, status: StoryStatus) -> None:
         session.commit()
 
 
+def _open_fanout(
+    story_id: str, version_id: str, stage: StageName, *, total: int, pending: int
+) -> None:
+    """Declare a fan-out stage's size and publish where it is starting from.
+
+    The denominator is published up front rather than inferred from the first
+    completion, so the client renders "0 of 40 lines" the moment the stage starts
+    instead of showing an unquantified spinner until the first line lands.
+
+    `pending` is how many subtasks were enqueued; everything else `total` covers is
+    an asset this version inherited and is therefore already complete.
+    """
+    completed = max(total - pending, 0)
+    events.open_fanout(version_id, stage, total=total, completed=completed)
+    repo.publish(story_id, StageProgressEvent(stage=stage, completed=completed, total=total))
+
+
+def _report_fanout(session: Session, version_id: str, stage: StageName) -> None:
+    """Publish "n of m done" for one finished subtask of a fan-out stage.
+
+    Called on every path that settles a line or a scene, including the ones that
+    skip generation because the asset already exists. A subtask that finishes is
+    progress whether or not it was paid for, and counting only the paid ones would
+    leave the bar short of its total on any run that reused assets.
+
+    Cheap check first: the Redis counter is consulted before the story is looked
+    up, so the common case where there is nothing worth publishing costs no query.
+    """
+    counted = events.advance_fanout(version_id, stage)
+    if counted is None:
+        return
+    completed, total = counted
+
+    version = session.get(StoryVersion, version_id)
+    if version is None:
+        return
+
+    repo.publish(
+        version.story_id,
+        # Clamped because a Celery redelivery can settle the same line twice, and
+        # a bar reading "41 of 40" reads as a bug to the person watching it.
+        StageProgressEvent(stage=stage, completed=min(completed, total), total=total),
+    )
+
+
 # --- TTS concurrency semaphore -------------------------------------------
 
 _tts_redis: redis_lib.Redis | None = None
@@ -198,9 +252,7 @@ def run_stage(self, version_id: str, stage_value: str, user_id: str) -> str:  # 
 
     with session_scope() as session:
         state = repo.load_state(session, version_id)
-        job = repo.start_job(
-            session, story_id=state.story_id, version_id=version_id, stage=stage
-        )
+        job = repo.start_job(session, story_id=state.story_id, version_id=version_id, stage=stage)
         try:
             gateway = ModelGateway(
                 session,
@@ -209,6 +261,10 @@ def run_stage(self, version_id: str, stage_value: str, user_id: str) -> str:  # 
                 user_id=user_id,
                 story_id=state.story_id,
                 bypass_cache=_bypass_cache(state),
+                # A regeneration re-runs stages one Celery task at a time, and a
+                # user watching a rewrite wants the same live preview a first run
+                # gives them.
+                on_delta=stage_reporter(state.story_id, stage),
             )
             state = node(session, state, gateway)
             if stage not in state.completed_stages:
@@ -242,6 +298,7 @@ def tts_line(self, version_id: str, line_id: str, user_id: str) -> str | None:  
         # Fast path: already generated (Celery redelivery or prior run).
         if repo.find_asset(session, version_id=version_id, dedupe_key=dedupe):
             log.info("tts_cached", line_id=line_id)
+            _report_fanout(session, version_id, StageName.TTS_SYNTHESIS)
             return line_id
 
         # Atomic claim: prevents two concurrent workers from both paying.
@@ -250,6 +307,7 @@ def tts_line(self, version_id: str, line_id: str, user_id: str) -> str | None:  
         )
         if claim is None:
             log.info("tts_claimed_by_another", line_id=line_id)
+            _report_fanout(session, version_id, StageName.TTS_SYNTHESIS)
             return line_id
 
         state = repo.load_state(session, version_id)
@@ -260,11 +318,7 @@ def tts_line(self, version_id: str, line_id: str, user_id: str) -> str | None:  
 
         character = state.character_by_id(line.character_id) if line.character_id else None
         voice = (character.voice_preset if character else None) or "alloy"
-        lang_hint = (
-            f"Speak in {language_name(state.language)}."
-            if state.language != "en"
-            else None
-        )
+        lang_hint = f"Speak in {language_name(state.language)}." if state.language != "en" else None
         instructions = " ".join(
             filter(
                 None,
@@ -278,6 +332,8 @@ def tts_line(self, version_id: str, line_id: str, user_id: str) -> str | None:  
         )
 
         try:
+            from .casting import SARVAM_LANGUAGES
+
             gateway = ModelGateway(
                 session,
                 stage=StageName.TTS_SYNTHESIS.value,
@@ -286,10 +342,19 @@ def tts_line(self, version_id: str, line_id: str, user_id: str) -> str | None:  
                 story_id=state.story_id,
                 bypass_cache=_bypass_cache(state),
             )
+            use_sarvam = (
+                state.language in SARVAM_LANGUAGES
+                and gateway.settings.sarvam_api_key
+            )
             with _TTSSemaphore(state.story_id):
-                audio, duration_ms = gateway.speech(
-                    text=line.text, voice=voice, instructions=instructions
-                )
+                if use_sarvam:
+                    audio, duration_ms = gateway.sarvam_speech(
+                        text=line.text, voice=voice, language=state.language,
+                    )
+                else:
+                    audio, duration_ms = gateway.speech(
+                        text=line.text, voice=voice, instructions=instructions
+                    )
         except Exception:
             repo.release_claim(session, claim)
             raise
@@ -309,7 +374,8 @@ def tts_line(self, version_id: str, line_id: str, user_id: str) -> str | None:  
             instructions_used=instructions[:500],
             size_bytes=len(audio),
         )
-        repo.publish(state.story_id, {"type": "asset", "kind": "line_audio", "line_id": line_id})
+        repo.publish(state.story_id, AssetEvent(kind=AssetKind.LINE_AUDIO, line_id=line_id))
+        _report_fanout(session, version_id, StageName.TTS_SYNTHESIS)
     return line_id
 
 
@@ -323,6 +389,7 @@ def gen_image(self, version_id: str, scene_id: str, user_id: str, shot_type: str
 
     with session_scope() as session:
         if repo.find_asset(session, version_id=version_id, dedupe_key=dedupe):
+            _report_fanout(session, version_id, StageName.IMAGE_GENERATION)
             return scene_id
 
         claim = repo.claim_asset(
@@ -330,6 +397,7 @@ def gen_image(self, version_id: str, scene_id: str, user_id: str, shot_type: str
         )
         if claim is None:
             log.info("image_claimed_by_another", scene_id=scene_id, shot_type=shot_type, line_id=line_id)
+            _report_fanout(session, version_id, StageName.IMAGE_GENERATION)
             return scene_id
 
         state = repo.load_state(session, version_id)
@@ -363,6 +431,23 @@ def gen_image(self, version_id: str, scene_id: str, user_id: str, shot_type: str
                 bypass_cache=_bypass_cache(state),
             )
             image = gateway.image(prompt=prompt)
+        except (BadRequestError, OpenAIError) as exc:
+            # Safety rejections (public figures, copyrighted content, etc.)
+            # must not kill the chord. A missing image degrades the video to
+            # fewer frames or audio-only — far better than a dead story.
+            error_body = str(exc)
+            is_moderation = "moderation" in error_body or "safety" in error_body
+            if is_moderation:
+                repo.release_claim(session, claim)
+                log.warning(
+                    "image_moderation_blocked",
+                    scene_id=scene_id,
+                    line_id=line_id,
+                    error=error_body[:300],
+                )
+                return scene_id
+            repo.release_claim(session, claim)
+            raise
         except Exception:
             repo.release_claim(session, claim)
             raise
@@ -383,7 +468,8 @@ def gen_image(self, version_id: str, scene_id: str, user_id: str, shot_type: str
             line_id=line_id,
             size_bytes=len(image),
         )
-        repo.publish(state.story_id, {"type": "asset", "kind": "scene_image", "scene_id": scene_id})
+        repo.publish(state.story_id, AssetEvent(kind=AssetKind.SCENE_IMAGE, scene_id=scene_id))
+        _report_fanout(session, version_id, StageName.IMAGE_GENERATION)
     return scene_id
 
 
@@ -467,11 +553,7 @@ def gen_music(self, version_id: str, user_id: str) -> str | None:  # type: ignor
             repo.finish_job(session, job, status=JobStatus.SUCCEEDED)
             repo.publish(
                 state.story_id,
-                {
-                    "type": "asset",
-                    "kind": AssetKind.MUSIC_BED.value,
-                    "duration_ms": generated.duration_ms,
-                },
+                AssetEvent(kind=AssetKind.MUSIC_BED, duration_ms=generated.duration_ms),
             )
             log.info(
                 "music_generated",
@@ -489,11 +571,7 @@ def gen_music(self, version_id: str, user_id: str) -> str | None:  # type: ignor
             repo.finish_job(session, job, status=JobStatus.SKIPPED, error=public_error)
             repo.publish(
                 state.story_id,
-                {
-                    "type": "music_status",
-                    "status": "unavailable",
-                    "error": public_error,
-                },
+                MusicStatusEvent(status="unavailable", error=public_error),
             )
             log.warning("music_generation_degraded", version_id=version_id, error=str(exc))
             return None
@@ -585,12 +663,10 @@ def assemble(self, version_id: str, user_id: str) -> str:  # type: ignore[no-unt
             repo.finish_job(session, job, status=JobStatus.SUCCEEDED)
 
             if state.output_format in ("video", "both"):
-                compose_video_task.si(version_id, user_id).apply_async(
-                    queue=Queue.ASSEMBLY.value
-                )
+                compose_video_task.si(version_id, user_id).apply_async(queue=Queue.ASSEMBLY.value)
             else:
                 _mark_story(session, state.story_id, StoryStatus.READY)
-                repo.publish(state.story_id, {"type": "complete", "version_id": version_id})
+                repo.publish(state.story_id, CompleteEvent(version_id=version_id))
         except Exception as exc:
             repo.finish_job(session, job, status=JobStatus.FAILED, error=str(exc))
             _mark_story(session, state.story_id, StoryStatus.FAILED)
@@ -605,14 +681,16 @@ def compose_video_task(self, version_id: str, user_id: str) -> str:  # type: ign
     with session_scope() as session:
         state = repo.load_state(session, version_id)
         job = repo.start_job(
-            session, story_id=state.story_id, version_id=version_id,
+            session,
+            story_id=state.story_id,
+            version_id=version_id,
             stage=StageName.VIDEO_COMPOSITION,
         )
         try:
             if state.output_format not in ("video", "both"):
                 repo.finish_job(session, job, status=JobStatus.SKIPPED)
                 _mark_story(session, state.story_id, StoryStatus.READY)
-                repo.publish(state.story_id, {"type": "complete", "version_id": version_id})
+                repo.publish(state.story_id, CompleteEvent(version_id=version_id))
                 return version_id
 
             # Load audio assets for timeline calculation
@@ -677,7 +755,7 @@ def compose_video_task(self, version_id: str, user_id: str) -> str:  # type: ign
             if not scene_frames:
                 raise AssemblyError("no scene frames available for video composition")
 
-            video = compose_video(episode_audio, scene_frames)
+            video = compose_video(episode_audio, scene_frames, language=state.language)
 
             key = ids.object_key(version_id, AssetKind.FINAL_VIDEO, ext="mp4")
             store.put(key, video, "video/mp4")
@@ -695,7 +773,7 @@ def compose_video_task(self, version_id: str, user_id: str) -> str:  # type: ign
             repo.save_state(session, state)
             repo.finish_job(session, job, status=JobStatus.SUCCEEDED)
             _mark_story(session, state.story_id, StoryStatus.READY)
-            repo.publish(state.story_id, {"type": "complete", "version_id": version_id})
+            repo.publish(state.story_id, CompleteEvent(version_id=version_id))
         except Exception as exc:
             repo.finish_job(session, job, status=JobStatus.FAILED, error=str(exc))
             _mark_story(session, state.story_id, StoryStatus.FAILED)
@@ -731,15 +809,58 @@ def fan_out(
     with session_scope() as session:
         state = repo.load_state(session, version_id)
         existing_assets = list(
-            session.exec(
-                select(MediaAsset).where(MediaAsset.version_id == version_id)
-            ).all()
+            session.exec(select(MediaAsset).where(MediaAsset.version_id == version_id)).all()
         )
         existing = {asset.dedupe_key for asset in existing_assets}
         music_complete = any(
             asset.dedupe_key == ids.dedupe_key(AssetKind.MUSIC_BED) and asset.object_key
             for asset in existing_assets
         )
+
+        # A video needs artwork whether or not the caller asked for it. Decided
+        # before the stage rows are opened, because deciding it afterwards left the
+        # image stage generating images with no job row to report them against.
+        if state.output_format in ("video", "both"):
+            include_images = True
+
+        # Built before the stage rows are opened so each row can be published with a
+        # denominator immediately. Assets carried over from a parent version are not
+        # re-enqueued, so the task lists are what remains rather than the whole job.
+        line_tasks = [
+            tts_line.si(version_id, line.id, user_id)
+            for line in state.lines
+            if ids.dedupe_key(AssetKind.LINE_AUDIO, line_id=line.id) not in existing
+        ]
+        if include_images:
+            if state.output_format in ("video", "both"):
+                # One image per dialogue line, cycling shot framings for variety.
+                image_tasks = []
+                image_count = 0
+                for scene in state.scenes:
+                    scene_lines = [l for l in state.lines if l.scene_id == scene.id]
+                    for i, line in enumerate(sorted(scene_lines, key=lambda l: l.index)):
+                        if image_count >= limits.MAX_IMAGES_PER_STORY:
+                            break
+                        shot = limits.SHOT_TAGS[i % len(limits.SHOT_TAGS)]
+                        dk = ids.dedupe_key(AssetKind.SCENE_IMAGE, line_id=line.id)
+                        if dk not in existing:
+                            image_tasks.append(gen_image.si(version_id, scene.id, user_id, shot, line.id))
+                        image_count += 1
+                    if image_count >= limits.MAX_IMAGES_PER_STORY:
+                        break
+                image_total = image_count
+            else:
+                scenes_in_scope = state.scenes[: limits.MAX_IMAGES_PER_STORY]
+                image_tasks = [
+                    gen_image.si(version_id, scene.id, user_id)
+                    for scene in scenes_in_scope
+                    if ids.dedupe_key(AssetKind.SCENE_IMAGE, scene_id=scene.id) not in existing
+                ]
+                image_total = len(scenes_in_scope)
+        else:
+            image_tasks = []
+            image_total = 0
+
         # Opened here, closed by `assemble`: neither stage has a task of its own
         # to report against, and without these rows the stepper can never pass 80%.
         repo.start_job(
@@ -748,12 +869,26 @@ def fan_out(
             version_id=version_id,
             stage=StageName.TTS_SYNTHESIS,
         )
+        _open_fanout(
+            state.story_id,
+            version_id,
+            StageName.TTS_SYNTHESIS,
+            total=len(state.lines),
+            pending=len(line_tasks),
+        )
         if include_images:
             repo.start_job(
                 session,
                 story_id=state.story_id,
                 version_id=version_id,
                 stage=StageName.IMAGE_GENERATION,
+            )
+            _open_fanout(
+                state.story_id,
+                version_id,
+                StageName.IMAGE_GENERATION,
+                total=image_total,
+                pending=len(image_tasks),
             )
         if music_stage_requested and not settings.music_enabled:
             music_job = repo.start_job(
@@ -769,36 +904,7 @@ def fan_out(
                 error="Background score is disabled.",
             )
 
-    if state.output_format in ("video", "both"):
-        include_images = True
-
-    jobs = [
-        tts_line.si(version_id, line.id, user_id)
-        for line in state.lines
-        if ids.dedupe_key(AssetKind.LINE_AUDIO, line_id=line.id) not in existing
-    ]
-    if include_images:
-        if state.output_format in ("video", "both"):
-            # One image per dialogue line, cycling shot framings for variety
-            image_count = 0
-            for scene in state.scenes:
-                scene_lines = [l for l in state.lines if l.scene_id == scene.id]
-                for i, line in enumerate(sorted(scene_lines, key=lambda l: l.index)):
-                    if image_count >= limits.MAX_IMAGES_PER_STORY:
-                        break
-                    shot = limits.SHOT_TAGS[i % len(limits.SHOT_TAGS)]
-                    dk = ids.dedupe_key(AssetKind.SCENE_IMAGE, line_id=line.id)
-                    if dk not in existing:
-                        jobs.append(gen_image.si(version_id, scene.id, user_id, shot, line.id))
-                    image_count += 1
-                if image_count >= limits.MAX_IMAGES_PER_STORY:
-                    break
-        else:
-            jobs += [
-                gen_image.si(version_id, scene.id, user_id)
-                for scene in state.scenes[: limits.MAX_IMAGES_PER_STORY]
-                if ids.dedupe_key(AssetKind.SCENE_IMAGE, scene_id=scene.id) not in existing
-            ]
+    jobs = [*line_tasks, *image_tasks]
     # A committed empty slot is a recoverable interrupted generation, not an
     # asset. Re-submit it under the same sidecar idempotency key so it resumes
     # safely instead of producing a permanent narration-only version.
@@ -946,9 +1052,7 @@ def regenerate(  # type: ignore[no-untyped-def]
     planned = [stage for stage in requested if stage in allowed]
 
     steps = [
-        run_stage.si(version_id, stage.value, user_id)
-        for stage in planned
-        if stage in STAGE_NODES
+        run_stage.si(version_id, stage.value, user_id) for stage in planned if stage in STAGE_NODES
     ]
     if (
         StageName.TTS_SYNTHESIS in planned
@@ -1012,12 +1116,11 @@ def _fail_feedback(story_id: str, feedback_id: str, exc: Exception) -> None:
 
     repo.publish(
         story_id,
-        {
-            "type": "feedback",
-            "status": FeedbackStatus.FAILED.value,
-            "feedback_id": feedback_id,
-            "error": str(exc)[:500],
-        },
+        FeedbackEvent(
+            status=FeedbackStatus.FAILED,
+            feedback_id=feedback_id,
+            error=str(exc)[:500],
+        ),
     )
 
 
@@ -1041,9 +1144,7 @@ def interpret_feedback(  # type: ignore[no-untyped-def]
         raise
 
 
-def _interpret_feedback(
-    story_id: str, version_id: str, user_id: str, feedback_id: str
-) -> str:
+def _interpret_feedback(story_id: str, version_id: str, user_id: str, feedback_id: str) -> str:
     from daastaan_contracts.models import RegenDirective
 
     with session_scope() as session:
@@ -1131,19 +1232,23 @@ def _interpret_feedback(
 
     repo.publish(
         story_id,
-        {
-            "type": "feedback",
-            "status": FeedbackStatus.APPLIED.value,
-            "feedback_id": feedback_id,
-            "version_id": new_version_id,
-            "scope": scope.value,
-            "target_stage": target_stage.value,
-            "target_id": target_id,
-        },
+        FeedbackEvent(
+            status=FeedbackStatus.APPLIED,
+            feedback_id=feedback_id,
+            version_id=new_version_id,
+            scope=scope,
+            target_stage=target_stage,
+            target_id=target_id,
+        ),
     )
     regenerate.si(
-        story_id, new_version_id, user_id, [s.value for s in planned], scope.value,
-        target_id, directive.instruction_delta,
+        story_id,
+        new_version_id,
+        user_id,
+        [s.value for s in planned],
+        scope.value,
+        target_id,
+        directive.instruction_delta,
     ).apply_async(queue=Queue.AGENTS.value)
     return new_version_id
 
@@ -1324,9 +1429,7 @@ def _clean_document(
     from daastaan_contracts import StoryCleanupOutput
 
     with session_scope() as session:
-        gateway = ModelGateway(
-            session, stage="document_ingest", version_id=None, user_id=user_id
-        )
+        gateway = ModelGateway(session, stage="document_ingest", version_id=None, user_id=user_id)
         # Extracted text is exactly as untrusted as text a user types, and this
         # is the first model to see it. Moderation reads a prefix: the endpoint
         # has its own size limit and a whole book would cost more to screen than
@@ -1348,8 +1451,7 @@ def _clean_document(
     cleaned = result.cleaned_text.strip()[: limits.MAX_STORY_INPUT_CHARS]
     if len(cleaned) < 20:
         raise ExtractionError(
-            "No story could be found in that file. Check the upload, or paste the "
-            "text in directly."
+            "No story could be found in that file. Check the upload, or paste the text in directly."
         )
 
     # The model is asked to pass prose through, not summarise it. When it ignores

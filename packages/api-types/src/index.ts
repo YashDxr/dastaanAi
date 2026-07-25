@@ -6,9 +6,18 @@
  * truth, so neither React app ever hand-writes a request or response interface.
  */
 
-import type { paths } from './schema'
+import type { components, paths } from './schema'
 
-export type { paths }
+export type { components, paths }
+
+/**
+ * One live progress frame.
+ *
+ * Generated like everything else here: the union is published into the OpenAPI
+ * document by the API so the event contract has the same single source of truth as
+ * requests and responses, rather than being a hand-copied mirror that drifts.
+ */
+export type ProgressEvent = components['schemas']['ProgressEvent']
 
 /** Response body of a GET, keyed by path. */
 export type GetResponse<P extends keyof paths> = paths[P] extends {
@@ -88,15 +97,27 @@ export async function apiFetch<T>(path: string, init: RequestInit = {}): Promise
  * the session cookie travels with it, and the browser handles reconnection
  * itself. Callers still need a polling fallback for the case where the stream
  * cannot be established at all.
+ *
+ * Reconnection is gapless without anything being done here. The API stamps each
+ * frame with the id of its entry in the story's event stream, and `EventSource`
+ * replays the last id it saw in `Last-Event-ID` when it retries - so the server
+ * resumes from exactly where this client left off.
  */
 export function openProgressStream(
   storyId: string,
-  handlers: { onEvent: (event: unknown) => void; onOpen?: () => void; onError?: () => void },
+  handlers: {
+    onEvent: (event: ProgressEvent) => void
+    onOpen?: () => void
+    onError?: () => void
+  },
 ): EventSource {
   const source = new EventSource(`/api/stories/${storyId}/events`, { withCredentials: true })
   source.onmessage = (message) => {
     try {
-      handlers.onEvent(JSON.parse(message.data))
+      // Asserted rather than validated: the union is closed, and a frame from a
+      // newer worker carrying an unknown `type` is safe because every consumer
+      // dispatches on `type` and ignores what it does not recognise.
+      handlers.onEvent(JSON.parse(message.data) as ProgressEvent)
     } catch {
       // Ignore malformed frames rather than tearing down the stream.
     }

@@ -91,6 +91,9 @@ class Settings(BaseSettings):
     model_image: str = "gpt-image-1"
     model_moderation: str = "omni-moderation-latest"
 
+    # --- Sarvam (optional, Hindi TTS) ----------------------------------------
+    sarvam_api_key: str | None = None
+
     # --- local music sidecar ---------------------------------------------
     # The MLX model runs natively on an Apple-Silicon Mac. Docker workers only
     # call its private HTTP API; they never load model weights themselves.

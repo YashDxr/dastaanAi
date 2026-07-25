@@ -42,6 +42,12 @@ export type Job = {
   finished_at: string | null
 }
 
+export type StageProgress = {
+  stage: string
+  completed: number
+  total: number
+}
+
 export type Progress = {
   story_id: string
   version_id: string | null
@@ -49,6 +55,10 @@ export type Progress = {
   /** Stages this run covers — a scoped regeneration only lists its own slice. */
   planned_stages?: string[]
   jobs: Job[]
+  /** Per-line and per-scene completion for the fan-out stages, recomputed from
+   *  stored assets. The live stream reports the same figures; this is what keeps the
+   *  fan-out detailed when the stream is unavailable. */
+  stage_progress?: StageProgress[]
 }
 
 export type RegenDirective = {

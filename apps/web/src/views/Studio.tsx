@@ -7,6 +7,7 @@ import { ProgressStepper } from '../components/ProgressStepper'
 import { ScenePanel } from '../components/ScenePanel'
 import { ScriptPanel } from '../components/ScriptPanel'
 import { formatError, stories as storiesApi, watchProgress } from '../api'
+import { applyEvent, emptyLive } from '../live'
 import type { FeedbackEntry, Progress, StoryDetail, User } from '../types'
 
 type Props = {
@@ -20,6 +21,9 @@ type Props = {
 export function Studio({ user, storyId, onLogout, onHome, onCompose }: Props) {
   const [detail, setDetail] = useState<StoryDetail | null>(null)
   const [progress, setProgress] = useState<Progress | null>(null)
+  // Live progress, folded from the event stream. Kept beside `progress` rather than
+  // merged into it so the polled snapshot stays exactly what the server said.
+  const [live, setLive] = useState(emptyLive)
   const [feedback, setFeedback] = useState<FeedbackEntry[]>([])
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
@@ -86,10 +90,21 @@ export function Studio({ user, storyId, onLogout, onHome, onCompose }: Props) {
   useEffect(() => {
     const status = progress?.status ?? detail?.story.status
     if (status !== 'generating') return
-    return watchProgress(storyId, () => {
-      void refresh()
+    return watchProgress(storyId, {
+      // `applyEvent` returns the same object when a frame changes nothing, so the
+      // steady drip of heartbeats and token counts does not re-render the studio.
+      onEvent: (event) => setLive((current) => applyEvent(current, event)),
+      onRefresh: () => {
+        void refresh()
+      },
     })
   }, [storyId, progress?.status, detail?.story.status, refresh])
+
+  // A new run starts from a clean overlay. Without this, the previews and counts
+  // from the previous take would still be on screen while the next one warmed up.
+  useEffect(() => {
+    setLive(emptyLive)
+  }, [storyId, detail?.version?.id])
 
   const state = detail?.state
   const regenerating = detail?.story.status === 'generating'
@@ -174,7 +189,7 @@ export function Studio({ user, storyId, onLogout, onHome, onCompose }: Props) {
 
             {error && <p className="form-error">{error}</p>}
 
-            <ProgressStepper progress={progress} interpreting={interpreting} />
+            <ProgressStepper progress={progress} live={live} interpreting={interpreting} />
 
             <nav className="studio-tabs" role="tablist" aria-label="Studio sections">
               {(
