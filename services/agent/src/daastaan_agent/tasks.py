@@ -567,15 +567,20 @@ def run_pipeline(self, story_id: str, version_id: str, user_id: str) -> str:  # 
                 story_id=story_id,
                 version_id=version_id,
             )
-
             state = repo.load_state(session, version_id)
+            pipeline_run_id = pipeline_run.id
 
-            t0 = time.monotonic()
-            state = run_agent_stages(session, state, user_id)
-            total_s = time.monotonic() - t0
+        # Each graph node opens its own session_scope(), so parallel
+        # branches (stages 5+6) never share a SQLAlchemy session.
+        t0 = time.monotonic()
+        state = run_agent_stages(state, user_id)
+        total_s = time.monotonic() - t0
 
+        with session_scope() as session:
             repo.save_state(session, state)
-            repo.finish_pipeline_run(session, pipeline_run, status="succeeded")
+            run = session.get(type(pipeline_run), pipeline_run_id)
+            if run:
+                repo.finish_pipeline_run(session, run, status="succeeded")
 
             log.info(
                 "pipeline_stages_completed",
