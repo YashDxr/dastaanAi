@@ -7,9 +7,15 @@ still agree on the wire format through `daastaan_contracts.TaskName`.
 
 import structlog
 from daastaan_common import celery_app
+from daastaan_common.request_id import CELERY_REQUEST_ID_KEY, current_request_id
 from daastaan_contracts import Queue, StageName, TaskName
 
 log = structlog.get_logger(__name__)
+
+
+def _task_headers() -> dict[str, str]:
+    request_id = current_request_id()
+    return {CELERY_REQUEST_ID_KEY: request_id} if request_id else {}
 
 
 def dispatch_pipeline(*, story_id: str, version_id: str, user_id: str) -> str:
@@ -17,6 +23,7 @@ def dispatch_pipeline(*, story_id: str, version_id: str, user_id: str) -> str:
         TaskName.RUN_PIPELINE.value,
         kwargs={"story_id": story_id, "version_id": version_id, "user_id": user_id},
         queue=Queue.AGENTS.value,
+        headers=_task_headers(),
     )
     log.info("dispatched_pipeline", story_id=story_id, version_id=version_id, task_id=task.id)
     return task.id
@@ -44,6 +51,7 @@ def dispatch_regeneration(
             "instruction_delta": instruction_delta,
         },
         queue=Queue.AGENTS.value,
+        headers=_task_headers(),
     )
     log.info(
         "dispatched_regeneration",
@@ -67,6 +75,7 @@ def dispatch_feedback_interpretation(
             "feedback_id": feedback_id,
         },
         queue=Queue.AGENTS.value,
+        headers=_task_headers(),
     )
     log.info("dispatched_feedback", feedback_id=feedback_id, task_id=task.id)
     return task.id

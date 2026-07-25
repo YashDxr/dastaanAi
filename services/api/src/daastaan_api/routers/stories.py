@@ -1,7 +1,14 @@
-from typing import Any
-
+from daastaan_common import carry_over_assets
 from daastaan_common.models import Job, MediaAsset, Story, StoryVersion
-from daastaan_contracts import Scope, StageName, StoryState, StoryStatus, limits, plan_stages
+from daastaan_contracts import (
+    PIPELINE_STAGES,
+    Scope,
+    StageName,
+    StoryState,
+    StoryStatus,
+    limits,
+    plan_stages,
+)
 from fastapi import APIRouter, HTTPException, status
 from sqlmodel import select
 
@@ -123,104 +130,34 @@ def get_progress(story: OwnedStory, session: SessionDep) -> ProgressOut:
         .where(Job.version_id == story.current_version_id)
         .order_by(Job.created_at)
     ).all()
-    return ProgressOut(
-        story_id=story.id,
-        version_id=story.current_version_id,
-        status=story.status,
-        jobs=[JobOut.model_validate(job, from_attributes=True) for job in jobs],
-    )
-
-
-def _state_for(story: Story, session: SessionDep) -> dict[str, Any]:
-    """Read the existing JSON pipeline state without altering database schema or rows."""
     version = (
         session.get(StoryVersion, story.current_version_id)
         if story.current_version_id
         else None
     )
-    return version.state_json if version else {}
-
-
-@router.get("/{story_id}/processing")
-def processing_status(story: OwnedStory, session: SessionDep) -> dict[str, Any]:
-    """UI-friendly adapter for the existing job table; no new persistence."""
-    jobs = session.exec(
-        select(Job).where(Job.version_id == story.current_version_id).order_by(Job.created_at)
-    ).all()
-    statuses = {job.stage: job.status for job in jobs}
-    completed = sum(job.status == "completed" for job in jobs)
-    progress = round((completed / len(jobs)) * 100) if jobs else 0
-    return {
-        "story_id": story.id,
-        "progress": progress,
-        "nodes": statuses,
-        "estimated_seconds": max(0, (len(jobs) - completed) * 30),
-        "logs": [
-            {"level": "warn" if job.error else "info", "node": job.stage,
-             "msg": job.error or f"{job.stage} {job.status}"}
-            for job in jobs
-        ],
-    }
-
-
-@router.get("/{story_id}/understanding")
-def story_understanding(story: OwnedStory, session: SessionDep) -> dict[str, Any]:
-    """Expose existing StoryState understanding fields as a presentation adapter."""
-    state = _state_for(story, session)
-    return {
-        "story_id": story.id,
-        "title": state.get("title") or story.title,
-        "summary": state.get("arc_summary"),
-        "setting": state.get("setting"),
-        "scenes": state.get("scenes", []),
-        "characters": state.get("characters", []),
-        "lines": state.get("lines", []),
-        "mood": state.get("mood"),
-    }
-
-
-@router.get("/{story_id}/personas")
-def story_personas(story: OwnedStory, session: SessionDep) -> dict[str, Any]:
-    state = _state_for(story, session)
-    return {"story_id": story.id, "selected": state.get("narrator_persona"),
-            "available": [state["narrator_persona"]] if state.get("narrator_persona") else []}
-
-
-@router.get("/{story_id}/voices")
-def character_voices(story: OwnedStory, session: SessionDep) -> dict[str, Any]:
-    state = _state_for(story, session)
-    return {"story_id": story.id, "characters": state.get("characters", []),
-            "voice_map": state.get("voice_map", [])}
-
-
-@router.patch("/{story_id}/voices/{character_id}")
-def preview_character_voice(
-    character_id: str, body: dict[str, Any], story: OwnedStory
-) -> dict[str, Any]:
-    """Return a validated UI preview only. Persistence waits for a voice-edit contract.
-
-    This intentionally does not update the database or StoryVersion.state_json.
-    """
-    return {"story_id": story.id, "character_id": character_id, "preview": body,
-            "persisted": False}
-
-
-@router.get("/{story_id}/episode")
-def episode_player(story: OwnedStory, session: SessionDep) -> dict[str, Any]:
-    state = _state_for(story, session)
-    version_id = story.current_version_id
-    assets = (
-        list(session.exec(select(MediaAsset).where(MediaAsset.version_id == version_id)).all())
-        if version_id
-        else []
+    return ProgressOut(
+        story_id=story.id,
+        version_id=story.current_version_id,
+        status=story.status,
+        planned_stages=[stage.value for stage in _planned_stages(version)],
+        jobs=[JobOut.model_validate(job, from_attributes=True) for job in jobs],
     )
-    return {
-        "story_id": story.id,
-        "title": state.get("title") or story.title,
-        "transcript": state.get("lines", []),
-        "episode_key": state.get("final_episode_key"),
-        "assets": [_asset_out(asset).model_dump() for asset in assets],
-    }
+
+
+def _planned_stages(version: StoryVersion | None) -> tuple[StageName, ...]:
+    """What this run is actually expected to do.
+
+    A regeneration only touches a slice of the pipeline, so reporting it against
+    all ten stages would show a mostly-empty bar and read as though the story had
+    been thrown away and restarted.
+    """
+    regen = (version.state_json or {}).get("regen") if version else None
+    if not regen:
+        return PIPELINE_STAGES
+    try:
+        return plan_stages(Scope(regen["scope"]), StageName(regen["target_stage"]))
+    except (KeyError, ValueError):
+        return PIPELINE_STAGES
 
 
 @router.post(
@@ -260,6 +197,16 @@ def regenerate(
     )
     session.add(child)
     session.flush()
+
+    carry_over_assets(
+        session,
+        parent_version_id=parent.id,
+        child_version_id=child.id,
+        state=StoryState.model_validate(parent.state_json),
+        scope=Scope(body.scope),
+        planned=stages,
+        target_id=body.target_id,
+    )
 
     child.state_json["version_id"] = child.id
     child.state_json["regen"] = {

@@ -23,11 +23,19 @@ class Settings(BaseSettings):
 
     app_env: Literal["local", "staging", "prod"] = "local"
     log_level: str = "INFO"
+    # JSON logs are required for Loki/Grafana field search (request_id, etc.).
     log_json: bool = False
 
     # --- database ---------------------------------------------------------
-    # `local` points at the Compose Postgres. `lakebase` swaps in a Databricks
-    # OAuth token per connection; see db.py.
+    # Where Postgres runs for local development. Orthogonal to `db_backend`
+    # (which switches local Postgres vs Databricks Lakebase).
+    #   docker → Compose starts the `postgres` service (make up)
+    #   host   → use a Postgres already listening on your machine; set
+    #            DATABASE_URL to host.docker.internal from containers
+    postgres_mode: Literal["docker", "host"] = "docker"
+
+    # `local` points at Postgres (Compose or host). `lakebase` swaps in a
+    # Databricks OAuth token per connection; see db.py.
     db_backend: Literal["local", "lakebase"] = "local"
     database_url: str = "postgresql+psycopg://daastaan:daastaan@localhost:5432/daastaan"
     db_echo: bool = False

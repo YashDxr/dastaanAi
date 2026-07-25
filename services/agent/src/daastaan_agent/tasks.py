@@ -14,7 +14,7 @@ from typing import Any
 
 import structlog
 from celery import chain, chord, group
-from daastaan_common import celery_app, get_store, ids, session_scope
+from daastaan_common import carry_over_assets, celery_app, get_store, ids, session_scope
 from daastaan_common.models import Feedback, MediaAsset, Story, StoryVersion
 from daastaan_contracts import (
     AGENT_STAGES,
@@ -209,6 +209,8 @@ def assemble(self, version_id: str, user_id: str) -> str:  # type: ignore[no-unt
     init_tracing()
     with session_scope() as session:
         state = repo.load_state(session, version_id)
+        # Reaching the callback means the whole media group has drained.
+        repo.close_fanout_jobs(session, version_id)
         job = repo.start_job(
             session, story_id=state.story_id, version_id=version_id, stage=StageName.ASSEMBLY
         )
@@ -269,15 +271,45 @@ def fan_out(self, version_id: str, user_id: str, include_images: bool = True) ->
 
     A chord rather than two groups so assembly runs exactly once, after both
     media kinds finish.
+
+    Assets already present on this version are skipped. On a first run that set is
+    empty; on a regeneration it holds everything the fork carried over from the
+    parent, so a one-line respeak enqueues one TTS task instead of one per line.
     """
     with session_scope() as session:
         state = repo.load_state(session, version_id)
+        existing = {
+            asset.dedupe_key
+            for asset in session.exec(
+                select(MediaAsset).where(MediaAsset.version_id == version_id)
+            ).all()
+        }
+        # Opened here, closed by `assemble`: neither stage has a task of its own
+        # to report against, and without these rows the stepper can never pass 80%.
+        repo.start_job(
+            session,
+            story_id=state.story_id,
+            version_id=version_id,
+            stage=StageName.TTS_SYNTHESIS,
+        )
+        if include_images:
+            repo.start_job(
+                session,
+                story_id=state.story_id,
+                version_id=version_id,
+                stage=StageName.IMAGE_GENERATION,
+            )
 
-    jobs = [tts_line.si(version_id, line.id, user_id) for line in state.lines]
+    jobs = [
+        tts_line.si(version_id, line.id, user_id)
+        for line in state.lines
+        if ids.dedupe_key(AssetKind.LINE_AUDIO, line_id=line.id) not in existing
+    ]
     if include_images:
         jobs += [
             gen_image.si(version_id, scene.id, user_id)
             for scene in state.scenes[: limits.MAX_IMAGES_PER_STORY]
+            if ids.dedupe_key(AssetKind.SCENE_IMAGE, scene_id=scene.id) not in existing
         ]
 
     if not jobs:
@@ -399,6 +431,18 @@ def interpret_feedback(  # type: ignore[no-untyped-def]
         )
         session.add(child)
         session.flush()
+
+        if parent:
+            carry_over_assets(
+                session,
+                parent_version_id=parent.id,
+                child_version_id=child.id,
+                state=state,
+                scope=scope,
+                planned=planned,
+                target_id=target_id,
+            )
+
         child.state_json["version_id"] = child.id
         child.state_json["regen"] = {
             "scope": scope.value,

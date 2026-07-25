@@ -1,1 +1,112 @@
-html{background:#0e0b14}#root{min-height:100vh}.demo-creds{margin-top:24px;border-top:1px solid var(--border);padding-top:20px}.demo-creds>p:not(.eyebrow){color:var(--muted);font-size:12px;line-height:1.5}.demo-creds>div{display:grid;gap:7px;margin:13px 0}.demo-creds span{display:grid;grid-template-columns:60px 1fr auto;align-items:center;gap:8px;background:var(--ink-2);border:1px solid var(--border);padding:8px 10px;border-radius:4px}.demo-creds b{font:10px var(--mono);color:var(--muted);text-transform:uppercase}.demo-creds code{font:11px var(--mono);color:var(--parchment)}.demo-creds span button{border:0;background:transparent;color:var(--ember);font-size:11px;font-weight:700}.demo-creds>.button{width:100%;margin-top:4px}
+:root {
+  --ink: #121816;
+  --ink-soft: #3d4a45;
+  --mist: #e8eeec;
+  --paper: #f4f7f6;
+  --panel: #ffffffcc;
+  --line: #c5d0cb;
+  --teal: #0a6b66;
+  --teal-deep: #064e4a;
+  --amber: #b86e18;
+  --danger: #b42318;
+  --ok: #1f7a4c;
+  --shadow: 0 1px 0 rgba(18, 24, 22, 0.04);
+
+  --display: "Newsreader", "Iowan Old Style", "Palatino Linotype", serif;
+  --sans: "Sora", "Avenir Next", "Segoe UI", sans-serif;
+
+  --ease: cubic-bezier(0.22, 1, 0.36, 1);
+  --radius: 10px;
+
+  color: var(--ink);
+  background: var(--mist);
+  font-family: var(--sans);
+  font-size: 16px;
+  line-height: 1.5;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  min-height: 100%;
+  margin: 0;
+}
+
+body {
+  min-height: 100svh;
+  background:
+    radial-gradient(120% 80% at 100% 0%, rgba(10, 107, 102, 0.12), transparent 55%),
+    radial-gradient(90% 60% at 0% 100%, rgba(184, 110, 24, 0.08), transparent 50%),
+    linear-gradient(180deg, #eef3f1 0%, var(--mist) 100%);
+}
+
+button,
+input,
+textarea,
+select {
+  font: inherit;
+  color: inherit;
+}
+
+button {
+  cursor: pointer;
+}
+
+a {
+  color: inherit;
+}
+
+img {
+  max-width: 100%;
+  display: block;
+}
+
+:focus-visible {
+  outline: 2px solid var(--teal);
+  outline-offset: 2px;
+}
+
+@keyframes rise {
+  from {
+    opacity: 0;
+    transform: translateY(18px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes fade {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes pulse-line {
+  0%,
+  100% {
+    opacity: 0.35;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}

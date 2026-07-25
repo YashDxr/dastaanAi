@@ -14,6 +14,7 @@ from contextlib import asynccontextmanager
 
 import structlog
 from daastaan_common import configure_logging, get_settings, session_scope
+from daastaan_common.middleware import RequestIdMiddleware
 from daastaan_contracts import StageName, StoryState
 from fastapi import FastAPI, HTTPException, status
 from pydantic import BaseModel
@@ -35,6 +36,7 @@ async def lifespan(app: FastAPI):  # type: ignore[no-untyped-def]
 
 
 app = FastAPI(title="Daastaan Agent Service", version="0.1.0", lifespan=lifespan)
+app.add_middleware(RequestIdMiddleware)
 
 
 class DebugRunRequest(BaseModel):

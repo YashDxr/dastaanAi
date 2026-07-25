@@ -1,0 +1,82 @@
+================================================================================
+  ESSENTIAL — commands you actually need to run the project
+================================================================================
+
+COMMAND                                      | WHAT IT'S FOR
+--------------------------------------------|------------------------------------------
+export PATH="$HOME/.local/bin:$PATH"        | Put uv on PATH (this shell session)
+make setup                                  | First-time: Python deps, npm deps, create .env
+make up                                     | Start full backend (API, agent, workers, Redis; +Postgres if POSTGRES_MODE=docker)
+make web                                    | Start user app on http://localhost:5173
+make admin                                  | Start admin panel on http://localhost:5174
+make down                                   | Stop all Compose services
+make ps                                     | Show whether containers are up
+
+# Required .env (edit once after make setup)
+OPENAI_API_KEY=sk-...                       | Required for real generations
+POSTGRES_MODE=docker                        | Use Compose Postgres (default; simplest)
+POSTGRES_MODE=host                          | Use your laptop Postgres instead
+DATABASE_URL=postgresql+psycopg://daastaan:daastaan@postgres:5432/daastaan | DB URL for Compose Postgres
+DATABASE_URL=postgresql+psycopg://USER:PASS@host.docker.internal:5432/DB | DB URL if POSTGRES_MODE=host
+
+# Main URLs
+http://localhost:5173                       | User app
+http://localhost:5174                       | Admin panel
+http://localhost:8000/api/docs              | API docs
+
+# Typical day
+make up && make web                         | Start backend + open the app
+
+
+================================================================================
+  OPTIONAL — useful to look at / debug when something breaks
+================================================================================
+
+COMMAND                                      | WHAT IT'S FOR
+--------------------------------------------|------------------------------------------
+make help                                   | List all Make targets
+make infra                                  | Redis (+ Postgres) only — for host-mode coding
+make api                                    | API on host with reload (:8000)
+make agent                                  | Agent service on host with reload (:8100)
+make worker                                 | One Celery worker on host (all queues)
+make tools                                  | Redis Insight (:5540) + Flower (:5555)
+make observe                                | Loki + Grafana (:3000) for log search
+make logs                                   | Tail all service logs
+make logs-api                               | Tail API logs
+make logs-agent                             | Tail agent logs
+make logs-worker-agents                     | Tail reasoning-stage worker logs
+make logs-worker-media                      | Tail TTS/image worker logs
+make logs-worker-assembly                   | Tail ffmpeg assembly logs
+make logs-workers                           | Tail all three workers
+make logs-postgres                          | Tail Postgres logs
+make logs-redis                             | Tail Redis logs
+make nuke                                   | Stop stack and wipe volumes (destructive)
+make sync                                   | Refresh Python packages
+make fix-pth                                | macOS .pth import fix
+make types                                  | Regenerate TS types from OpenAPI
+make fmt                                    | Format Python
+make lint                                   | Lint Python/JS
+make test                                   | Run pytest
+make check                                  | Full local CI check
+LOG_JSON=true                               | JSON logs (better for Grafana search)
+curl -s http://localhost:8000/api/health    | API alive?
+curl -s http://localhost:8000/api/health/ready | API + DB + Redis ready?
+curl -s http://localhost:8100/health        | Agent alive?
+curl -s http://localhost:8100/stages        | Which pipeline stages exist
+curl -si http://localhost:8000/api/health \| grep -i x-request-id | See request id header
+curl -s -c /tmp/daastaan.txt -X POST http://localhost:8000/api/auth/signup -H 'Content-Type: application/json' -d '{"email":"you@example.com","password":"password123"}' | Sign up via curl
+curl -s -c /tmp/daastaan.txt -X POST http://localhost:8000/api/auth/login -H 'Content-Type: application/json' -d '{"email":"you@example.com","password":"password123"}' | Log in via curl
+curl -s -b /tmp/daastaan.txt -X POST http://localhost:8000/api/stories -H 'Content-Type: application/json' -d '{"raw_text":"I dreamt the station flooded and a woman in red called my name.","genre_hint":"surreal thriller"}' | Create story via curl
+curl -s -b /tmp/daastaan.txt http://localhost:8000/api/stories/STORY_ID/jobs | Check generation progress
+curl -s -b /tmp/daastaan.txt http://localhost:8000/api/stories/STORY_ID | Inspect story + assets
+docker compose exec postgres psql -U daastaan -d daastaan | Open SQL shell
+docker compose exec postgres psql -U daastaan -d daastaan -c "UPDATE users SET role = 'admin' WHERE email = 'you@example.com';" | Make a user admin
+docker compose exec postgres psql -U daastaan -d daastaan -c "SELECT id, title, status FROM stories ORDER BY created_at DESC LIMIT 10;" | Recent stories
+docker compose exec postgres psql -U daastaan -d daastaan -c "SELECT stage, status, left(error,80) FROM jobs ORDER BY created_at DESC LIMIT 30;" | Recent job errors
+docker compose logs api worker-agents worker-media 2>&1 \| grep YOUR_REQUEST_ID | Trace one request in logs
+{compose_project="daastaan"} |= "YOUR_REQUEST_ID" | Grafana Explore query for one request
+http://localhost:5540                       | Redis Insight UI
+http://localhost:5555                       | Flower (Celery) UI
+http://localhost:3000                       | Grafana (admin/admin)
+http://localhost:3100                       | Loki
+http://localhost:8100/health                | Agent health URL

@@ -15,27 +15,63 @@ services/agent        LangGraph stages, TTS, images, ffmpeg assembly, Celery wor
 apps/web              Listener app (Vite + React), port 5173.
 apps/admin            Operator panel (Vite + React), port 5174.
 infra/docker          Shared Dockerfile for the API, agent, and all workers.
+infra/observability   Loki, Promtail, Grafana provisioning for request-id search.
 ```
 
-Python is a `uv` workspace; JavaScript is an `npm` workspace. One Postgres, one
-Redis, one image for every Python process.
+Python is a `uv` workspace; JavaScript is an `npm` workspace. One Redis, one
+image for every Python process. Postgres is either Compose-managed or your host
+install (`POSTGRES_MODE`).
 
 ## Getting started
 
 ```bash
 make setup          # Python deps, JS deps, and a .env from the template
 # add your OPENAI_API_KEY to .env
-make up             # Postgres, Redis, API, agent, three worker pools
+make up             # Redis, API, agent, workers (+ Postgres if POSTGRES_MODE=docker)
 make web            # listener app on http://localhost:5173
 make admin          # operator panel on http://localhost:5174
 ```
 
 The API is on http://localhost:8000, with docs at `/api/docs`.
 
-To iterate faster, run the databases in Docker and the services on your host:
+### Postgres: Docker or your local install
+
+Set in `.env`:
 
 ```bash
-make infra          # just Postgres and Redis
+POSTGRES_MODE=docker   # Compose Postgres (default)
+# or
+POSTGRES_MODE=host     # your laptop Postgres — Compose will not start a DB container
+```
+
+For `host` mode, point containers at your machine:
+
+```bash
+DATABASE_URL=postgresql+psycopg://USER:PASS@host.docker.internal:5432/YOUR_DB
+```
+
+Create the database/user on the host once; the API still runs `create_all` on startup.
+
+### Tools and debugging
+
+```bash
+make tools            # Redis Insight :5540 + Flower :5555
+make observe          # Loki + Grafana :3000 (admin/admin). Prefer LOG_JSON=true
+make logs-api         # also: logs-agent, logs-worker-media, logs-redis, …
+```
+
+Every HTTP response includes `X-Request-ID`. With `LOG_JSON=true` and `make observe`, open Grafana Explore and search:
+
+```
+{compose_project="daastaan"} |= "YOUR_REQUEST_ID"
+```
+
+Or use the provisioned **Daastaan request debugger** dashboard.
+
+To iterate faster, run Redis/(optional) Postgres in Docker and the services on your host:
+
+```bash
+make infra          # Redis (+ Postgres when POSTGRES_MODE=docker)
 make api            # reload-on-save
 make worker         # one worker across all queues
 ```
