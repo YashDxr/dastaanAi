@@ -96,35 +96,108 @@ workers, assembly worker, and Flower receive no music bearer/HMAC credentials.
 
 ## 4. Connect workers on another trusted laptop
 
-Keep the host service on `127.0.0.1`. On Tailscale 1.52 or newer, use its
-private HTTPS Serve reverse proxy on the music Mac, then configure remote
-Dastaan worker containers with the resulting Tailnet URL:
+This is the recommended path for teammates running the Dastaan Docker stack on
+a different Mac. It replaces the LAN-IP approach (fragile, IP changes on every
+network switch) with a permanent private HTTPS URL that survives Wi-Fi changes
+and works across different networks.
+
+### 4a. One-time setup on the music Mac (already done for this repo)
+
+Tailscale is installed and Serve is active. The sidecar URL for this Mac is:
+
+```
+https://subramanyas-macbook-air.tail70ba05.ts.net
+```
+
+Steps taken (for reference / reproduction on a fresh Mac):
 
 ```bash
+# Install
+brew install tailscale
+brew services start tailscale
+
+# Log in (opens browser)
+tailscale up
+
+# Enable Tailscale Serve — proxies the loopback sidecar over private HTTPS
 tailscale serve --bg --https=443 http://127.0.0.1:8787
 tailscale serve status
 ```
 
-`--bg` is the current Serve flag for a background proxy; `tailscale serve 8787`
-is the equivalent foreground form while verifying the setup. Do not use
-`tailscale funnel` for this service.
+Then start the sidecar as usual (loopback only is fine — Tailscale Serve handles
+the HTTPS termination):
 
-```dotenv
-MUSIC_SERVICE_BASE_URL=https://music-mac.your-tailnet.ts.net
+```bash
+make music-service
 ```
 
-Create a Tailnet grant/ACL that allows only Dastaan agent-host tags to reach the
-music Mac. Keep the bearer/HMAC credentials enabled as defense in depth. Do not
-use Tailscale Funnel, public ngrok links, public Gradio sharing, router
-port-forwarding, or a public load balancer.
+Do **not** use `tailscale funnel`, public ngrok links, router port-forwarding,
+or any public load balancer for this service.
 
-The agent accepts only `https://*.ts.net` for a remote sidecar URL. Keep the
-sidecar loopback-bound; Tailscale Serve terminates private Tailnet HTTPS without
-opening the laptop to the public internet. When rotating credentials, pause or
-disable music, replace both values in `.env.music` on the music host and every
-authorized worker host, restart `make music-service` and recreate only
-`worker-music`, then re-enable music. Existing stories remain playable and any
-in-flight optional score can be regenerated from feedback.
+### 4b. Setup on the calling laptop (teammate's Mac)
+
+1. Install Tailscale and join the **same tailnet account**:
+
+   ```bash
+   brew install tailscale
+   brew services start tailscale
+   tailscale up   # log in with the same account used on the music Mac
+   ```
+
+2. Verify you can reach the sidecar:
+
+   ```bash
+   curl -fsS https://subramanyas-macbook-air.tail70ba05.ts.net/healthz
+   # → {"status":"ok"}
+   ```
+
+3. Add to your **`.env`** (shared Compose env):
+
+   ```dotenv
+   MUSIC_ENABLED=true
+   MUSIC_SERVICE_BASE_URL=https://subramanyas-macbook-air.tail70ba05.ts.net
+   MUSIC_SERVICE_TIMEOUT_SECONDS=600
+   MUSIC_SERVICE_POLL_INTERVAL_SECONDS=2
+   MUSIC_DURATION_SECONDS=30
+   ```
+
+4. Create **`.env.music`** (private, gitignored — get values from the music Mac owner):
+
+   ```dotenv
+   MUSIC_SERVICE_TOKEN=<token from music Mac's .env.music>
+   MUSIC_SERVICE_HMAC_SECRET=<hmac secret from music Mac's .env.music>
+   MUSIC_SERVICE_SA3_PATH=/Users/subramanyarao/src/stable-audio-3/optimized/mlx/sa3
+   MUSIC_SERVICE_DATA_DIR=/Users/subramanyarao/.local/share/daastaan-music
+   MUSIC_SERVICE_OUTPUT_RETENTION_SECONDS=3600
+   ```
+
+5. Recreate the music worker so it picks up the new config:
+
+   ```bash
+   docker compose up -d --force-recreate worker-music
+   ```
+
+6. Confirm the container can reach the sidecar:
+
+   ```bash
+   docker compose exec worker-music curl -fsS \
+     https://subramanyas-macbook-air.tail70ba05.ts.net/healthz
+   # → {"status":"ok"}
+   ```
+
+### Why not LAN IP?
+
+The Dastaan settings validator rejects raw LAN HTTP URLs (e.g.
+`http://10.x.x.x:8787`) — only `localhost`/`host.docker.internal` (HTTP) or
+`*.ts.net` (HTTPS) are allowed. LAN IPs also change every time the music Mac
+joins a different network. The Tailscale URL is permanent.
+
+### Credential rotation
+
+Pause or disable music, replace both `MUSIC_SERVICE_TOKEN` and
+`MUSIC_SERVICE_HMAC_SECRET` in `.env.music` on the music host and every
+authorized worker host, restart `make music-service`, and recreate only
+`worker-music`. Existing stories remain playable.
 
 ## 5. Test in isolation
 

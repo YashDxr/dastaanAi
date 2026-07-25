@@ -9,9 +9,14 @@ type Props = {
   storyId: string
   /** Only meaningful once assembly has produced a mix. */
   enabled: boolean
+  /**
+   * When true the format list is shown directly — no toggle button.
+   * Used inside the unified Downloads section in the player.
+   */
+  inline?: boolean
 }
 
-export function ExportPanel({ storyId, enabled }: Props) {
+export function ExportPanel({ storyId, enabled, inline = false }: Props) {
   const [formats, setFormats] = useState<ExportFormat[] | null>(null)
   const [open, setOpen] = useState(false)
   const [working, setWorking] = useState<string | null>(null)
@@ -38,9 +43,11 @@ export function ExportPanel({ storyId, enabled }: Props) {
       })
   }, [storyId])
 
+  // In inline mode load immediately; in toggle mode load on open.
   useEffect(() => {
+    if (inline && enabled) { load(); return }
     if (open && enabled) load()
-  }, [open, enabled, load])
+  }, [open, inline, enabled, load])
 
   const download = useCallback(
     (fmt: ExportFormat) => {
@@ -101,6 +108,21 @@ export function ExportPanel({ storyId, enabled }: Props) {
 
   if (!enabled) return null
 
+  // Inline mode: render just the format list, no toggle. The parent (Downloads
+  // section in the player) handles the heading and reveal.
+  if (inline) {
+    return (
+      <FormatList
+        formats={formats}
+        working={working}
+        error={error}
+        note="128 kbps MP3 master. Other formats are converted from it."
+        onDownload={download}
+      />
+    )
+  }
+
+  // Standalone mode: full collapsible panel (used outside the player).
   return (
     <div className="export">
       <button
@@ -111,43 +133,68 @@ export function ExportPanel({ storyId, enabled }: Props) {
       >
         {open ? 'Hide download options' : 'Download'}
       </button>
-
       {open && (
         <div className="export-panel">
           <p className="export-note">
             The episode is mixed as a 128 kbps MP3. Every other format is converted from
             it, so none of them sound better than the original.
           </p>
-          <ul className="export-list">
-            {(formats ?? []).map((fmt) => (
-              <li key={fmt.format} className={fmt.recommended ? 'recommended' : ''}>
-                <div className="export-meta">
-                  <span className="export-label">
-                    {fmt.label}
-                    {fmt.recommended && <span className="pill">Recommended</span>}
-                  </span>
-                  <span className="export-detail">{fmt.detail}</span>
-                </div>
-                <button
-                  type="button"
-                  className="btn ghost small"
-                  disabled={working !== null}
-                  onClick={() => download(fmt)}
-                >
-                  {working === fmt.format
-                    ? 'Preparing…'
-                    : fmt.ready
-                      ? `Download${fmt.size_bytes ? ` (${megabytes(fmt.size_bytes)})` : ''}`
-                      : 'Prepare'}
-                </button>
-              </li>
-            ))}
-            {formats === null && <li className="muted">Loading formats…</li>}
-          </ul>
-          {error && <p className="form-error">{error}</p>}
+          <FormatList
+            formats={formats}
+            working={working}
+            error={error}
+            onDownload={download}
+          />
         </div>
       )}
     </div>
+  )
+}
+
+function FormatList({
+  formats,
+  working,
+  error,
+  note,
+  onDownload,
+}: {
+  formats: ExportFormat[] | null
+  working: string | null
+  error: string | null
+  note?: string
+  onDownload: (fmt: ExportFormat) => void
+}) {
+  return (
+    <>
+      {note && <p className="export-note">{note}</p>}
+      <ul className="export-list">
+        {(formats ?? []).map((fmt) => (
+          <li key={fmt.format} className={fmt.recommended ? 'recommended' : ''}>
+            <div className="export-meta">
+              <span className="export-label">
+                {fmt.label}
+                {fmt.recommended && <span className="pill">Recommended</span>}
+              </span>
+              <span className="export-detail">{fmt.detail}</span>
+            </div>
+            <button
+              type="button"
+              className="btn ghost small"
+              disabled={working !== null}
+              onClick={() => onDownload(fmt)}
+            >
+              {working === fmt.format
+                ? 'Preparing…'
+                : fmt.ready
+                  ? `Download${fmt.size_bytes ? ` (${megabytes(fmt.size_bytes)})` : ''}`
+                  : 'Prepare'}
+            </button>
+          </li>
+        ))}
+        {formats === null && <li className="muted">Loading formats…</li>}
+      </ul>
+      {error && <p className="form-error">{error}</p>}
+    </>
   )
 }
 

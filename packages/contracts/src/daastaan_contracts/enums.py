@@ -104,6 +104,8 @@ class AssetKind(StrEnum):
     # A transcode of FINAL_EPISODE for download. Kept apart from the episode so
     # the player always resolves the master and never picks up a variant.
     EPISODE_EXPORT = "episode_export"
+    # A transcode of MUSIC_BED for download. Same pattern as EPISODE_EXPORT.
+    BGM_EXPORT = "bgm_export"
 
 
 class IngestStatus(StrEnum):

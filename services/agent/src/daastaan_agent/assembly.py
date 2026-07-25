@@ -20,7 +20,10 @@ import structlog
 
 log = structlog.get_logger(__name__)
 
-MUSIC_BED_VOLUME = 0.18
+# Music ducking: the bed plays at MUSIC_IDLE_VOLUME during pauses and is
+# compressed down when narration is active.  sidechaincompress listens to
+# the narration track and reduces the bed's gain when speech is detected.
+MUSIC_IDLE_VOLUME = 0.35
 OUTPUT_BITRATE = "128k"
 LOUDNORM = "loudnorm=I=-16:TP=-1.5:LRA=11"
 
@@ -130,9 +133,28 @@ def compose_episode(clips: list[Clip], music_bed: bytes | None = None) -> bytes:
             # -stream_loop repeats the bed so a short track still covers a long
             # episode; duration=first ends the mix when the narration ends.
             inputs += ["-stream_loop", "-1", "-i", str(bed_path)]
-            filters.append(f"[{len(clips)}:a]volume={MUSIC_BED_VOLUME},aresample=44100[bed]")
+            # Raise base level so music is audible in pauses
             filters.append(
-                "[narration][bed]amix=inputs=2:duration=first:dropout_transition=0[mixed]"
+                f"[{len(clips)}:a]volume={MUSIC_IDLE_VOLUME},aresample=44100[bed]"
+            )
+            # Split narration: one copy drives the sidechain, the other is
+            # mixed into the final output.  ffmpeg pads can only be consumed
+            # once, so asplit is required.
+            filters.append("[narration]asplit=2[narr_mix][narr_sc]")
+            # Sidechain compress: narration controls the music's gain.
+            #   level_in=1   – don't boost the sidechain signal
+            #   threshold=0.02 – start compressing at low narration amplitude (catches quiet speech)
+            #   ratio=6      – strong compression (≈ 6:1) so music drops substantially
+            #   attack=80    – 80 ms onset so ducking kicks in quickly when speech starts
+            #   release=600  – 600 ms release so music fades back smoothly after speech
+            #   mix=1        – fully wet (use only compressed output)
+            filters.append(
+                "[bed][narr_sc]sidechaincompress="
+                "level_in=1:threshold=0.02:ratio=6:attack=80:release=600:mix=1"
+                "[ducked]"
+            )
+            filters.append(
+                "[narr_mix][ducked]amix=inputs=2:duration=first:dropout_transition=0[mixed]"
             )
             filters.append(f"[mixed]{LOUDNORM}[out]")
         else:
@@ -162,12 +184,12 @@ def compose_episode(clips: list[Clip], music_bed: bytes | None = None) -> bytes:
 
 # --- export transcodes -----------------------------------------------------
 
-# Every export is derived from the MP3 master, which is itself lossy at 128 kbps.
-# Nothing here recovers quality that the master does not have: FLAC and WAV are
-# lossless *containers* around a lossy source and are only useful for editing,
-# and the lossy targets are set high enough that a second generation of encoding
-# is not audible. MP3 is absent on purpose - the master is already MP3, and
-# re-encoding it to itself would lose quality for nothing.
+# Every episode export is derived from the MP3 master, which is itself lossy at
+# 128 kbps. Nothing here recovers quality that the master does not have: FLAC and
+# WAV are lossless *containers* around a lossy source and are only useful for
+# editing, and the lossy targets are set high enough that a second generation of
+# encoding is not audible. MP3 is absent on purpose - the master is already MP3,
+# and re-encoding it to itself would lose quality for nothing.
 AUDIO_EXPORTS: dict[str, tuple[list[str], str, str]] = {
     "m4a": (["-c:a", "aac", "-b:a", "192k"], "m4a", "audio/mp4"),
     "opus": (["-c:a", "libopus", "-b:a", "96k"], "opus", "audio/ogg"),
@@ -179,11 +201,30 @@ AUDIO_EXPORTS: dict[str, tuple[list[str], str, str]] = {
 MASTER_FORMAT = "mp3"
 MASTER_CONTENT_TYPE = "audio/mpeg"
 
+# BGM exports start from a lossless 44.1 kHz stereo WAV, so MP3 and FLAC are
+# genuine improvements over the episode exports (no second-generation lossy step).
+# WAV is excluded here because it is always served directly from the stored asset.
+BGM_AUDIO_EXPORTS: dict[str, tuple[list[str], str, str]] = {
+    "mp3": (["-c:a", "libmp3lame", "-b:a", "192k", "-q:a", "2"], "mp3", "audio/mpeg"),
+    "m4a": (["-c:a", "aac", "-b:a", "256k"], "m4a", "audio/mp4"),
+    "opus": (["-c:a", "libopus", "-b:a", "128k"], "opus", "audio/ogg"),
+    "flac": (["-c:a", "flac"], "flac", "audio/flac"),
+}
+
+BGM_MASTER_FORMAT = "wav"
+BGM_MASTER_CONTENT_TYPE = "audio/wav"
+
 
 def export_content_type(fmt: str) -> str:
     if fmt == MASTER_FORMAT:
         return MASTER_CONTENT_TYPE
     return AUDIO_EXPORTS[fmt][2]
+
+
+def bgm_content_type(fmt: str) -> str:
+    if fmt == BGM_MASTER_FORMAT:
+        return BGM_MASTER_CONTENT_TYPE
+    return BGM_AUDIO_EXPORTS[fmt][2]
 
 
 def transcode(audio: bytes, fmt: str) -> bytes:
@@ -219,6 +260,40 @@ def transcode(audio: bytes, fmt: str) -> bytes:
 
         data = output.read_bytes()
         log.info("episode_transcoded", fmt=fmt, source_bytes=len(audio), output_bytes=len(data))
+        return data
+
+
+def transcode_bgm(audio: bytes, fmt: str) -> bytes:
+    """Re-encode a 44.1 kHz stereo WAV music bed into a download format.
+
+    The source is lossless, so MP3 and FLAC here are first-generation encodes —
+    genuinely better than the episode exports which start from a 128 kbps MP3.
+    WAV is not accepted because callers serve the stored asset directly.
+    """
+    if fmt not in BGM_AUDIO_EXPORTS:
+        raise AssemblyError(f"unsupported BGM export format: {fmt}")
+
+    codec_args, extension, _ = BGM_AUDIO_EXPORTS[fmt]
+
+    with tempfile.TemporaryDirectory(prefix="daastaan-bgm-") as tmp:
+        workdir = Path(tmp)
+        source = workdir / "master.wav"
+        source.write_bytes(audio)
+        output = workdir / f"bgm.{extension}"
+
+        command = [
+            ffmpeg_path(), "-hide_banner", "-loglevel", "error", "-y",
+            "-i", str(source),
+            *codec_args,
+            str(output),
+        ]
+        result = subprocess.run(command, capture_output=True, text=True, timeout=120)  # noqa: S603
+        if result.returncode != 0:
+            log.error("bgm_transcode_failed", fmt=fmt, stderr=result.stderr[-2000:])
+            raise AssemblyError(f"ffmpeg exited {result.returncode}: {result.stderr[-500:]}")
+
+        data = output.read_bytes()
+        log.info("bgm_transcoded", fmt=fmt, source_bytes=len(audio), output_bytes=len(data))
         return data
 
 
