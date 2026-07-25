@@ -57,7 +57,6 @@ from .assembly import (
     AssemblyError,
     Clip,
     SceneFrame,
-    build_scene_timeline,
     compose_episode,
     compose_video,
     export_content_type,
@@ -365,9 +364,12 @@ def tts_line(self, version_id: str, line_id: str, user_id: str) -> str | None:  
 
 
 @celery_app.task(name=TaskName.GEN_IMAGE.value, bind=True, **RETRY_KWARGS)
-def gen_image(self, version_id: str, scene_id: str, user_id: str) -> str | None:  # type: ignore[no-untyped-def]
+def gen_image(self, version_id: str, scene_id: str, user_id: str, shot_type: str | None = None, line_id: str | None = None) -> str | None:  # type: ignore[no-untyped-def]
     init_tracing()
-    dedupe = ids.dedupe_key(AssetKind.SCENE_IMAGE, scene_id=scene_id)
+    if line_id:
+        dedupe = ids.dedupe_key(AssetKind.SCENE_IMAGE, line_id=line_id)
+    else:
+        dedupe = ids.dedupe_key(AssetKind.SCENE_IMAGE, scene_id=scene_id, tag=shot_type)
 
     with session_scope() as session:
         if repo.find_asset(session, version_id=version_id, dedupe_key=dedupe):
@@ -378,7 +380,7 @@ def gen_image(self, version_id: str, scene_id: str, user_id: str) -> str | None:
             session, version_id=version_id, kind=AssetKind.SCENE_IMAGE, dedupe_key=dedupe
         )
         if claim is None:
-            log.info("image_claimed_by_another", scene_id=scene_id)
+            log.info("image_claimed_by_another", scene_id=scene_id, shot_type=shot_type, line_id=line_id)
             _report_fanout(session, version_id, StageName.IMAGE_GENERATION)
             return scene_id
 
@@ -389,10 +391,20 @@ def gen_image(self, version_id: str, scene_id: str, user_id: str) -> str | None:
             raise LookupError(f"scene {scene_id} not present in version {version_id}")
 
         mood = state.mood.mood if state.mood else "neutral"
-        prompt = (
-            f"{prompts.SCENE_IMAGE}\n\nScene: {scene.title}. {scene.summary}\n"
-            f"Setting: {scene.setting}. Mood: {mood}."
-        )
+
+        if line_id:
+            line = state.line_by_id(line_id)
+            if line is None:
+                repo.release_claim(session, claim)
+                raise LookupError(f"line {line_id} not present in version {version_id}")
+            prompt = prompts.line_image_prompt(shot_type or "mid", scene, line, mood)
+        else:
+            image_prompt = prompts.SHOT_PROMPTS[shot_type] if shot_type else prompts.SCENE_IMAGE
+            prompt = (
+                f"{image_prompt}\n\nScene: {scene.title}. {scene.summary}\n"
+                f"Setting: {scene.setting}. Mood: {mood}."
+            )
+
         try:
             gateway = ModelGateway(
                 session,
@@ -407,7 +419,10 @@ def gen_image(self, version_id: str, scene_id: str, user_id: str) -> str | None:
             repo.release_claim(session, claim)
             raise
 
-        key = ids.object_key(version_id, AssetKind.SCENE_IMAGE, scene_id=scene_id, ext="png")
+        if line_id:
+            key = ids.object_key(version_id, AssetKind.SCENE_IMAGE, line_id=line_id, ext="png")
+        else:
+            key = ids.object_key(version_id, AssetKind.SCENE_IMAGE, scene_id=scene_id, tag=shot_type, ext="png")
         get_store().put(key, image, "image/png")
         repo.record_asset(
             session,
@@ -417,6 +432,7 @@ def gen_image(self, version_id: str, scene_id: str, user_id: str) -> str | None:
             object_key=key,
             content_type="image/png",
             scene_id=scene_id,
+            line_id=line_id,
             size_bytes=len(image),
         )
         repo.publish(state.story_id, AssetEvent(kind=AssetKind.SCENE_IMAGE, scene_id=scene_id))
@@ -655,16 +671,21 @@ def compose_video_task(self, version_id: str, user_id: str) -> str:  # type: ign
                 ).all()
             }
 
-            # Load scene image assets
-            image_assets = {
-                asset.scene_id: asset
-                for asset in session.exec(
-                    select(MediaAsset).where(
-                        MediaAsset.version_id == version_id,
-                        MediaAsset.kind == AssetKind.SCENE_IMAGE.value,
-                    )
-                ).all()
-            }
+            # Load scene image assets keyed by line_id (per-line images)
+            # and also by scene_id (fallback for audio-only thumbnails)
+            image_by_line: dict[str, MediaAsset] = {}
+            image_by_scene: dict[str, MediaAsset] = {}
+            for asset in session.exec(
+                select(MediaAsset).where(
+                    MediaAsset.version_id == version_id,
+                    MediaAsset.kind == AssetKind.SCENE_IMAGE.value,
+                )
+            ).all():
+                if asset.object_key:
+                    if asset.line_id:
+                        image_by_line[asset.line_id] = asset
+                    elif asset.scene_id:
+                        image_by_scene[asset.scene_id] = asset
 
             # Load the final episode audio
             if not state.final_episode_key:
@@ -672,30 +693,31 @@ def compose_video_task(self, version_id: str, user_id: str) -> str:  # type: ign
             store = get_store()
             episode_audio = store.get(state.final_episode_key)
 
-            # Build scene timeline
-            timeline = build_scene_timeline(state.lines, audio_assets)
-
-            # Build SceneFrame list, skipping scenes without images
+            # Build per-line frames: each line gets its own image with duration = audio + pause
             scene_frames: list[SceneFrame] = []
-            for scene in sorted(state.scenes, key=lambda s: s.index):
-                if scene.id not in image_assets or not image_assets[scene.id].object_key:
-                    log.warning("video_missing_scene_image", scene_id=scene.id)
+            for line in sorted(state.lines, key=lambda l: l.index):
+                img_asset = image_by_line.get(line.id)
+                if img_asset is None:
+                    # Fallback: try scene-level image
+                    img_asset = image_by_scene.get(line.scene_id)
+                if img_asset is None:
+                    log.warning("video_missing_line_image", line_id=line.id, scene_id=line.scene_id)
                     continue
-                if scene.id not in timeline:
-                    log.warning("video_missing_scene_timeline", scene_id=scene.id)
-                    continue
-                start_ms, end_ms = timeline[scene.id]
-                duration_ms = end_ms - start_ms
+
+                audio_asset = audio_assets.get(line.id)
+                audio_dur = audio_asset.duration_ms if audio_asset and audio_asset.duration_ms else 0
+                duration_ms = audio_dur + (line.pause_after_ms or 0)
                 if duration_ms <= 0:
                     continue
-                image_bytes = store.get(image_assets[scene.id].object_key)
-                scene_frames.append(
-                    SceneFrame(
-                        image=image_bytes,
-                        duration_ms=duration_ms,
-                        scene_id=scene.id,
-                    )
-                )
+
+                image_bytes = store.get(img_asset.object_key)
+                scene_frames.append(SceneFrame(
+                    image=image_bytes,
+                    duration_ms=duration_ms,
+                    scene_id=line.scene_id,
+                    text=line.text,
+                    speaker=line.speaker or "",
+                ))
 
             if not scene_frames:
                 raise AssemblyError("no scene frames available for video composition")
@@ -771,21 +793,40 @@ def fan_out(
         # Built before the stage rows are opened so each row can be published with a
         # denominator immediately. Assets carried over from a parent version are not
         # re-enqueued, so the task lists are what remains rather than the whole job.
-        scenes_in_scope = state.scenes[: limits.MAX_IMAGES_PER_STORY]
         line_tasks = [
             tts_line.si(version_id, line.id, user_id)
             for line in state.lines
             if ids.dedupe_key(AssetKind.LINE_AUDIO, line_id=line.id) not in existing
         ]
-        image_tasks = (
-            [
-                gen_image.si(version_id, scene.id, user_id)
-                for scene in scenes_in_scope
-                if ids.dedupe_key(AssetKind.SCENE_IMAGE, scene_id=scene.id) not in existing
-            ]
-            if include_images
-            else []
-        )
+        if include_images:
+            if state.output_format in ("video", "both"):
+                # One image per dialogue line, cycling shot framings for variety.
+                image_tasks = []
+                image_count = 0
+                for scene in state.scenes:
+                    scene_lines = [l for l in state.lines if l.scene_id == scene.id]
+                    for i, line in enumerate(sorted(scene_lines, key=lambda l: l.index)):
+                        if image_count >= limits.MAX_IMAGES_PER_STORY:
+                            break
+                        shot = limits.SHOT_TAGS[i % len(limits.SHOT_TAGS)]
+                        dk = ids.dedupe_key(AssetKind.SCENE_IMAGE, line_id=line.id)
+                        if dk not in existing:
+                            image_tasks.append(gen_image.si(version_id, scene.id, user_id, shot, line.id))
+                        image_count += 1
+                    if image_count >= limits.MAX_IMAGES_PER_STORY:
+                        break
+                image_total = image_count
+            else:
+                scenes_in_scope = state.scenes[: limits.MAX_IMAGES_PER_STORY]
+                image_tasks = [
+                    gen_image.si(version_id, scene.id, user_id)
+                    for scene in scenes_in_scope
+                    if ids.dedupe_key(AssetKind.SCENE_IMAGE, scene_id=scene.id) not in existing
+                ]
+                image_total = len(scenes_in_scope)
+        else:
+            image_tasks = []
+            image_total = 0
 
         # Opened here, closed by `assemble`: neither stage has a task of its own
         # to report against, and without these rows the stepper can never pass 80%.
@@ -813,7 +854,7 @@ def fan_out(
                 state.story_id,
                 version_id,
                 StageName.IMAGE_GENERATION,
-                total=len(scenes_in_scope),
+                total=image_total,
                 pending=len(image_tasks),
             )
         if music_stage_requested and not settings.music_enabled:

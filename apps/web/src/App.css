@@ -600,6 +600,41 @@
   background: var(--line);
 }
 
+/* Format selector ------------------------------------------------------ */
+
+.format-selector-group {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.format-selector {
+  display: flex;
+  gap: 0.4rem;
+}
+
+.format-selector .chip.active {
+  border-color: var(--teal);
+  background: color-mix(in srgb, var(--teal) 12%, #fff);
+  color: var(--teal-deep);
+  font-weight: 500;
+}
+
+.format-hint {
+  margin: 0;
+  font-size: 0.82rem;
+  color: var(--ink-soft);
+}
+
+/* Video player --------------------------------------------------------- */
+
+.video-player .video-element {
+  max-width: 100%;
+  border-radius: 10px;
+  margin-top: 1rem;
+  display: block;
+}
+
 /* Reshape -------------------------------------------------------------- */
 
 .example-chips {

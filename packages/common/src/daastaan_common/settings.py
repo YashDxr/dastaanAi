@@ -6,6 +6,7 @@ Postgres and a local directory with no Databricks account involved.
 """
 
 from functools import lru_cache
+from ipaddress import ip_address
 from typing import Literal
 from urllib.parse import urlparse, urlsplit, urlunsplit
 
@@ -15,6 +16,21 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 # Not a secret: a deliberately recognisable placeholder that the validator below
 # refuses to accept outside local development.
 DEV_JWT_SECRET = "dev-only-insecure-secret-change-me-before-deploying"  # noqa: S105
+
+
+def _http_music_host_allowed(host: str) -> bool:
+    """HTTP is loopback, Docker Desktop's host gateway, or a private LAN IP.
+
+    A teammate's Apple-Silicon music sidecar is often on the same Wi‑Fi rather
+    than Tailscale. Public hostnames stay rejected so a mis-set URL cannot point
+    credentials at the open internet.
+    """
+    if host in {"127.0.0.1", "localhost", "host.docker.internal"}:
+        return True
+    try:
+        return ip_address(host).is_private
+    except ValueError:
+        return False
 
 
 class Settings(BaseSettings):
@@ -148,13 +164,10 @@ class Settings(BaseSettings):
         host = parsed_music_url.hostname or ""
         if parsed_music_url.scheme not in {"http", "https"} or not host:
             music_problems.append("MUSIC_SERVICE_BASE_URL must be an absolute HTTP(S) URL")
-        elif parsed_music_url.scheme == "http" and host not in {
-            "127.0.0.1",
-            "localhost",
-            "host.docker.internal",
-        }:
+        elif parsed_music_url.scheme == "http" and not _http_music_host_allowed(host):
             music_problems.append(
-                "MUSIC_SERVICE_BASE_URL may use HTTP only for localhost or host.docker.internal"
+                "MUSIC_SERVICE_BASE_URL may use HTTP only for localhost, "
+                "host.docker.internal, or a private LAN IP"
             )
         elif parsed_music_url.scheme == "https" and not host.endswith(".ts.net"):
             music_problems.append(

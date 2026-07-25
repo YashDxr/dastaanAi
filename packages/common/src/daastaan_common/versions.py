@@ -13,6 +13,7 @@ the task returns without calling OpenAI.
 """
 
 from daastaan_contracts import AssetKind, Scope, StageName, StoryState
+from daastaan_contracts.limits import SHOT_TAGS
 from sqlmodel import Session, select
 
 from .models import MediaAsset
@@ -49,7 +50,15 @@ def invalidated_dedupe_keys(
             scene_ids = [target_id]
         else:
             scene_ids = [scene.id for scene in state.scenes]
-        stale |= {ids.dedupe_key(AssetKind.SCENE_IMAGE, scene_id=sid) for sid in scene_ids}
+        scene_id_set = set(scene_ids)
+        for sid in scene_ids:
+            stale.add(ids.dedupe_key(AssetKind.SCENE_IMAGE, scene_id=sid))
+            for tag in SHOT_TAGS:
+                stale.add(ids.dedupe_key(AssetKind.SCENE_IMAGE, scene_id=sid, tag=tag))
+        # Per-line image keys (used by video mode)
+        for line in state.lines:
+            if line.scene_id in scene_id_set:
+                stale.add(ids.dedupe_key(AssetKind.SCENE_IMAGE, line_id=line.id))
 
     if StageName.MUSIC_GENERATION in planned_set:
         stale.add(ids.dedupe_key(AssetKind.MUSIC_BED))
@@ -85,7 +94,7 @@ def carry_over_assets(
 
     copied = 0
     for asset in parent_assets:
-        if asset.kind == AssetKind.FINAL_EPISODE.value or asset.dedupe_key in stale:
+        if asset.kind in (AssetKind.FINAL_EPISODE.value, AssetKind.FINAL_VIDEO.value) or asset.dedupe_key in stale:
             continue
         session.add(
             MediaAsset(

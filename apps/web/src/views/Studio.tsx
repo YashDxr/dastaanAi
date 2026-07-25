@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { AppHeader } from '../components/AppHeader'
 import { AudioPlayer } from '../components/AudioPlayer'
+import { VideoPlayer, VideoPlayerEmpty } from '../components/VideoPlayer'
 import { FeedbackComposer } from '../components/FeedbackComposer'
 import { ProgressStepper } from '../components/ProgressStepper'
 import { ScenePanel } from '../components/ScenePanel'
@@ -123,6 +124,12 @@ export function Studio({ user, storyId, onLogout, onHome, onCompose }: Props) {
   const images = liveImages.length
     ? liveImages
     : stickyAssets.filter((a) => a.kind === 'scene_image')
+  const finalVideo =
+    playerAssets.find((a) => a.kind === 'final_video') ??
+    stickyAssets.find((a) => a.kind === 'final_video') ??
+    null
+  const wantsVideo =
+    state?.output_format === 'video' || state?.output_format === 'both'
   const scenes = state?.scenes ?? []
 
   async function respeakLine(lineId: string) {
@@ -227,6 +234,15 @@ export function Studio({ user, storyId, onLogout, onHome, onCompose }: Props) {
                   regenerating={regenerating}
                   onSeekHandled={() => setSeekLineId(null)}
                 />
+                {finalVideo ? (
+                  <VideoPlayer
+                    asset={finalVideo}
+                    title={detail.story.title}
+                    regenerating={regenerating}
+                  />
+                ) : wantsVideo ? (
+                  <VideoPlayerEmpty regenerating={regenerating} />
+                ) : null}
                 {state?.arc_summary && (
                   <section className="arc-panel">
                     <p className="eyebrow">Arc</p>
