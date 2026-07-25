@@ -36,6 +36,9 @@ from .models import (
     StoryUnderstandingOutput,
     ValidatedDirective,
     VoiceAssignment,
+    MysteryCaseOutput,
+    MysteryInterrogationOutput,
+    MysteryValidationOutput,
 )
 from .stages import (
     AGENT_STAGES,
@@ -85,6 +88,9 @@ __all__ = [
     "ValidatedDirective",
     "VoiceAge",
     "VoiceAssignment",
+    "MysteryCaseOutput",
+    "MysteryInterrogationOutput",
+    "MysteryValidationOutput",
     "VoiceGender",
     "downstream_from",
     "is_fanout",

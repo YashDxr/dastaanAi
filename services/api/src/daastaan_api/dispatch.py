@@ -29,6 +29,11 @@ def dispatch_pipeline(*, story_id: str, version_id: str, user_id: str) -> str:
     return task.id
 
 
+def dispatch_mystery(story_id: str, version_id: str, user_id: str) -> str:
+    task = celery_app.send_task(TaskName.GENERATE_MYSTERY.value, kwargs={"story_id": story_id, "version_id": version_id, "user_id": user_id}, queue=Queue.AGENTS.value, headers=_task_headers())
+    return task.id
+
+
 def dispatch_regeneration(
     *,
     story_id: str,

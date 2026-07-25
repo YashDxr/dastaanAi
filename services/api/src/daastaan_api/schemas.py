@@ -180,6 +180,35 @@ class DispatchAccepted(BaseModel):
     task_id: str
 
 
+# --- mysteries -------------------------------------------------------------
+
+class CreateMysteryRequest(BaseModel):
+    title: str | None = Field(default=None, max_length=120)
+    premise: str = Field(min_length=20, max_length=6000)
+    tone: Literal["noir", "cozy", "thriller", "supernatural", "classic_whodunit"] = "classic_whodunit"
+    setting: str = Field(min_length=2, max_length=240)
+    suspect_count: int = Field(default=4, ge=3, le=8)
+    difficulty: Literal["easy", "medium", "hard"] = "medium"
+    duration_minutes: int = Field(default=20, ge=5, le=90)
+    victim_name: str | None = Field(default=None, max_length=100)
+    suspect_names: list[str] = Field(default_factory=list, max_length=8)
+
+
+class InterrogateMysteryRequest(BaseModel):
+    suspect_id: str = Field(min_length=1, max_length=64)
+    question: str = Field(min_length=2, max_length=800)
+
+
+class AccuseMysteryRequest(BaseModel):
+    suspect_id: str = Field(min_length=1, max_length=64)
+
+
+class MysteryActionOut(BaseModel):
+    status: str
+    message: str
+    case: dict[str, Any]
+
+
 # --- admin -----------------------------------------------------------------
 
 

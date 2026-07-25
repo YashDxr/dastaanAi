@@ -23,6 +23,7 @@ from .routers import (
     health,
     ingest,
     media,
+    mysteries,
     progress,
     stories,
     studio,
@@ -81,7 +82,7 @@ async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONR
     )
 
 
-for router in (health.router, auth.router, stories.router, feedback.router, media.router,
+for router in (health.router, auth.router, stories.router, mysteries.router, feedback.router, media.router,
                admin.router, studio.router, ingest.router, exports.router,
                progress.sse_router):
     app.include_router(router, prefix="/api")

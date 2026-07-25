@@ -6,6 +6,7 @@ type Props = {
   stories: Story[]
   onLogout: () => void
   onCompose: () => void
+  onMystery: () => void
   onOpen: (storyId: string) => void
 }
 
@@ -17,7 +18,7 @@ function statusLabel(status: string) {
   return status
 }
 
-export function Library({ user, stories, onLogout, onCompose, onOpen }: Props) {
+export function Library({ user, stories, onLogout, onCompose, onMystery, onOpen }: Props) {
   return (
     <div className="app-frame">
       <AppHeader
@@ -37,6 +38,7 @@ export function Library({ user, stories, onLogout, onCompose, onOpen }: Props) {
           <button type="button" className="btn primary" onClick={onCompose}>
             New story
           </button>
+          <button type="button" className="btn secondary" onClick={onMystery}>Create mystery</button>
         </section>
 
         <section className="library-list" aria-label="Stories">

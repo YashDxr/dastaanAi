@@ -77,6 +77,15 @@ export const stories = {
     }),
 }
 
+export const mysteries = {
+  create: (body: Record<string, unknown>) => apiFetch<DispatchAccepted>('/mysteries', { method: 'POST', body: JSON.stringify(body) }),
+  get: (id: string) => apiFetch<{ status: string; message: string; case: any }>(`/mysteries/${id}`),
+  discover: (id: string, clueId: string) => apiFetch<{ case: any }>(`/mysteries/${id}/clues/${clueId}/discover`, { method: 'POST' }),
+  interrogate: (id: string, suspect_id: string, question: string) => apiFetch<{ case: any }>(`/mysteries/${id}/interrogate`, { method: 'POST', body: JSON.stringify({ suspect_id, question }) }),
+  accuse: (id: string, suspect_id: string) => apiFetch<{ status: string; message: string; case: any }>(`/mysteries/${id}/accuse`, { method: 'POST', body: JSON.stringify({ suspect_id }) }),
+  reveal: (id: string) => apiFetch<{ case: any }>(`/mysteries/${id}/reveal`, { method: 'POST' }),
+}
+
 export const ingest = {
   upload: (file: File) => {
     const body = new FormData()

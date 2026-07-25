@@ -12,7 +12,9 @@ regeneration still uses the per-stage Celery path because it re-enters the
 pipeline partway through.
 """
 
+import json
 import time
+from uuid import uuid4
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
@@ -42,6 +44,9 @@ from daastaan_contracts import (
     language_name,
     limits,
     plan_stages,
+    MysteryCaseOutput,
+    MysteryInterrogationOutput,
+    MysteryValidationOutput,
 )
 from sqlmodel import select
 
@@ -99,6 +104,10 @@ RETRY_KWARGS = {
     ),
 }
 
+MYSTERY_SYSTEM = """You are Daastaan's fair-play mystery showrunner. Create an original, cinematic and logically solvable case using broad genre conventions (noir moral ambiguity, cozy social observation, thriller pressure, supernatural dread, or classical clue craft), never imitate a named author or existing work. Return only the requested JSON; no chain-of-thought. There must be exactly one culprit whose name exactly matches one suspect. Every suspect needs a public alibi, a believable private secret, motive, and relationship. Provide at least five independent clues, with three that fairly identify the culprit. Red herrings must be compatible with the solution. Difficulty controls ambiguity and clue clarity, not whether the case is solvable. Do not reveal the culprit in title, premise, initial scene, alibis, or clue titles."""
+INTERROGATION_SYSTEM = """You are roleplaying a murder-mystery suspect. Return only structured JSON. Never state the killer identity, solution, or a private secret. Answer in character, concise, emotionally grounded, and plausibly evasive where appropriate. You may only use the supplied public suspect facts and already discovered clues."""
+MYSTERY_CRITIC_SYSTEM = """You are a strict fair-play mystery editor. Inspect the supplied private mystery JSON. Return only the requested JSON, with concise issue labels and no hidden reasoning. A valid case has exactly one culprit, an internally coherent timeline, at least three independent fair clues identifying that culprit, no contradictory red herrings, and no culprit/solution leakage in public-facing title, premise, initial scene, suspect alibis, or clue titles."""
+
 
 # Ingest gets its own policy. A file that cannot be parsed will not parse on the
 # fourth attempt either, so `ExtractionError` is terminal; only transport and
@@ -139,6 +148,65 @@ def _mark_story(session: Any, story_id: str, status: StoryStatus) -> None:
         story.status = status
         session.add(story)
         session.commit()
+
+
+@celery_app.task(name=TaskName.GENERATE_MYSTERY.value, bind=True, **RETRY_KWARGS)
+def generate_mystery(self, story_id: str, version_id: str, user_id: str) -> str:
+    """Generate and persist the complete private case in the existing version state."""
+    with session_scope() as session:
+        state = repo.load_state(session, version_id)
+        job = repo.start_job(session, story_id=story_id, version_id=version_id, stage="mystery_generation")
+        try:
+            request = (state.mystery or {}).get("request", {})
+            gateway = ModelGateway(session, stage="mystery_generation", version_id=version_id, user_id=user_id)
+            result = gateway.structured(schema=MysteryCaseOutput, system=MYSTERY_SYSTEM, user_content=json.dumps(request), kind="reasoning")
+            expected_suspects = int(request.get("suspect_count", 4))
+            requested_names = {name.casefold() for name in request.get("suspect_names", [])}
+            generated_names = {suspect.name.casefold() for suspect in result.suspects}
+            if len(result.suspects) != expected_suspects or result.culprit_name not in {s.name for s in result.suspects} or len(result.clues) < 5 or not requested_names.issubset(generated_names):
+                raise ValueError("generated mystery did not pass solvability validation")
+            critic = gateway.structured(schema=MysteryValidationOutput, system=MYSTERY_CRITIC_SYSTEM, user_content=result.model_dump_json(), kind="reasoning", temperature=0.1)
+            if not critic.valid or critic.public_spoiler_detected or critic.fair_clue_count < 3:
+                repair = gateway.structured(schema=MysteryCaseOutput, system=MYSTERY_SYSTEM, user_content=json.dumps({"request": request, "draft": result.model_dump(mode="json"), "repair_issues": critic.issues, "instruction": "Repair only the flagged sections while preserving valid characters, setting, and clues."}), kind="reasoning")
+                result = repair
+                critic = gateway.structured(schema=MysteryValidationOutput, system=MYSTERY_CRITIC_SYSTEM, user_content=result.model_dump_json(), kind="reasoning", temperature=0.1)
+                if not critic.valid or critic.public_spoiler_detected or critic.fair_clue_count < 3:
+                    raise ValueError("mystery consistency validation failed")
+            suspects = [{"id": str(uuid4()), **s.model_dump(), "is_culprit": s.name == result.culprit_name} for s in result.suspects]
+            culprit = next(s for s in suspects if s["is_culprit"])
+            clues = [{"id": str(uuid4()), **c.model_dump()} for c in result.clues]
+            state.title = result.title
+            state.setting = result.setting
+            state.mystery = {
+                "id": str(uuid4()), "title": result.title, "premise": result.premise, "setting": result.setting,
+                "victim": request.get("victim_name") or result.victim, "difficulty": request.get("difficulty", "medium"), "tone": request.get("tone", "classic_whodunit"), "duration_minutes": request.get("duration_minutes", 20), "suspects": suspects,
+                "culprit_id": culprit["id"], "culprit_motive": result.culprit_motive,
+                "crime_timeline": [x.model_dump() for x in result.crime_timeline], "clues": clues,
+                "red_herrings": result.red_herrings, "solution": result.solution, "reveal_scene": result.reveal_scene,
+                "initial_scene": result.initial_scene,
+                "consistency_checks": {"valid": critic.valid, "fair_clue_count": critic.fair_clue_count},
+            }
+            state.mystery_play = {"discovered_clue_ids": [], "interrogations": [], "accusations": [], "revealed": False}
+            repo.save_state(session, state); repo.finish_job(session, job, status=JobStatus.SUCCEEDED); _mark_story(session, story_id, StoryStatus.READY); repo.publish(story_id, {"type": "complete", "version_id": version_id})
+        except Exception as exc:
+            repo.finish_job(session, job, status=JobStatus.FAILED, error=str(exc)); _mark_story(session, story_id, StoryStatus.FAILED); raise
+    return version_id
+
+
+@celery_app.task(name=TaskName.INTERROGATE_MYSTERY.value, bind=True, **RETRY_KWARGS)
+def interrogate_mystery(self, version_id: str, user_id: str, suspect_id: str, question: str) -> str:
+    with session_scope() as session:
+        state = repo.load_state(session, version_id); case = state.mystery or {}; play = state.mystery_play or {}
+        suspect = next((s for s in case.get("suspects", []) if s["id"] == suspect_id), None)
+        if not suspect: raise LookupError("suspect not found")
+        discovered = [c for c in case.get("clues", []) if c["id"] in set(play.get("discovered_clue_ids", []))]
+        # Private secrets and culpability never enter the interrogation prompt.
+        # This makes redaction structural rather than relying on the model to obey.
+        allowed = {k: v for k, v in suspect.items() if k not in {"is_culprit", "motive", "secret"}}
+        result = ModelGateway(session, stage="mystery_interrogation", version_id=version_id, user_id=user_id).structured(schema=MysteryInterrogationOutput, system=INTERROGATION_SYSTEM, user_content=str({"suspect": allowed, "discovered_clues": discovered, "question": question}), kind="light")
+        play.setdefault("interrogations", []).append({"id": str(uuid4()), "suspect_id": suspect_id, "question": question, **result.model_dump()})
+        state.mystery_play = play; repo.save_state(session, state); repo.publish(state.story_id, {"type": "mystery_interrogation", "suspect_id": suspect_id})
+    return version_id
 
 
 # --- TTS concurrency semaphore -------------------------------------------

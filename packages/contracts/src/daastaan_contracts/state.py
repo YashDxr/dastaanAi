@@ -51,6 +51,9 @@ class StoryState(BaseModel):
     final_episode_key: str | None = None
     final_video_key: str | None = None
     output_format: str = "audio"
+    content_type: str = "story"
+    mystery: dict | None = None
+    mystery_play: dict | None = None
 
     # Set only on a regeneration run. Stages read it to narrow what they touch.
     regen: ValidatedDirective | None = None

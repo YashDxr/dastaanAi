@@ -234,3 +234,59 @@ class ValidatedDirective(Strict):
     target_stage: str
     target_id: str | None
     instruction_delta: str = Field(default="", max_length=500)
+
+
+# --- Infinite murder mystery ----------------------------------------------
+
+class MysterySuspectOutput(Strict):
+    name: str
+    role: str
+    personality: str
+    public_alibi: str
+    secret: str
+    motive: str
+    relationship_to_victim: str
+
+
+class MysteryClueOutput(Strict):
+    title: str
+    description: str
+    source_location: str
+    supports_or_contradicts: str
+    discovery_requirement: str
+    spoiler_level: int
+
+
+class MysteryTimelineOutput(Strict):
+    time: str
+    event: str
+
+
+class MysteryCaseOutput(Strict):
+    title: str
+    premise: str
+    setting: str
+    victim: str
+    suspects: list[MysterySuspectOutput]
+    culprit_name: str
+    culprit_motive: str
+    crime_timeline: list[MysteryTimelineOutput]
+    clues: list[MysteryClueOutput]
+    red_herrings: list[str]
+    solution: str
+    reveal_scene: str
+    initial_scene: str
+
+
+class MysteryInterrogationOutput(Strict):
+    response: str
+    emotion: str
+    intensity: int
+    tts_instructions: str
+
+
+class MysteryValidationOutput(Strict):
+    valid: bool
+    issues: list[str]
+    fair_clue_count: int
+    public_spoiler_detected: bool
