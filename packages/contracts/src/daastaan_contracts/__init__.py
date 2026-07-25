@@ -9,6 +9,7 @@ from .languages import language_name
 from .enums import (
     AssetKind,
     CharacterRole,
+    FeedbackStatus,
     JobStatus,
     LineType,
     Scope,
@@ -58,6 +59,7 @@ __all__ = [
     "DialogueLine",
     "DialogueScriptOutput",
     "EmotionTaggingOutput",
+    "FeedbackStatus",
     "JobStatus",
     "LineType",
     "MediaAsset",

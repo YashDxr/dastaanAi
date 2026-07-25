@@ -22,6 +22,7 @@ from daastaan_common import carry_over_assets, celery_app, get_settings, get_sto
 from daastaan_common.models import Feedback, MediaAsset, Story, StoryVersion
 from daastaan_contracts import (
     AssetKind,
+    FeedbackStatus,
     JobStatus,
     Queue,
     Scope,
@@ -68,6 +69,18 @@ RETRY_KWARGS = {
         *PERMANENT_FAILURES,
     ),
 }
+
+
+def _bypass_cache(state: StoryState) -> bool:
+    """Whether this run must ignore the response cache.
+
+    Every stage a regeneration executes was picked because the user wants a
+    different result. Some of those stages send inputs identical to the previous
+    run - a line respeak reaches TTS with the same text, voice and instructions -
+    so serving a cached response would return the take being replaced and the
+    regeneration would look like it did nothing.
+    """
+    return state.regen is not None
 
 
 def _mark_story(session: Any, story_id: str, status: StoryStatus) -> None:
@@ -140,7 +153,11 @@ def run_stage(self, version_id: str, stage_value: str, user_id: str) -> str:  # 
         )
         try:
             gateway = ModelGateway(
-                session, stage=stage.value, version_id=version_id, user_id=user_id
+                session,
+                stage=stage.value,
+                version_id=version_id,
+                user_id=user_id,
+                bypass_cache=_bypass_cache(state),
             )
             state = node(session, state, gateway)
             if stage not in state.completed_stages:
@@ -211,7 +228,11 @@ def tts_line(self, version_id: str, line_id: str, user_id: str) -> str | None:  
 
         try:
             gateway = ModelGateway(
-                session, stage=StageName.TTS_SYNTHESIS.value, version_id=version_id, user_id=user_id
+                session,
+                stage=StageName.TTS_SYNTHESIS.value,
+                version_id=version_id,
+                user_id=user_id,
+                bypass_cache=_bypass_cache(state),
             )
             with _TTSSemaphore(state.story_id):
                 audio, duration_ms = gateway.speech(
@@ -267,11 +288,13 @@ def gen_image(self, version_id: str, scene_id: str, user_id: str) -> str | None:
             f"{prompts.SCENE_IMAGE}\n\nScene: {scene.title}. {scene.summary}\n"
             f"Setting: {scene.setting}. Mood: {mood}."
         )
-
         try:
             gateway = ModelGateway(
-                session, stage=StageName.IMAGE_GENERATION.value,
-                version_id=version_id, user_id=user_id,
+                session,
+                stage=StageName.IMAGE_GENERATION.value,
+                version_id=version_id,
+                user_id=user_id,
+                bypass_cache=_bypass_cache(state),
             )
             image = gateway.image(prompt=prompt)
         except Exception:
@@ -672,6 +695,53 @@ def regenerate(  # type: ignore[no-untyped-def]
     return version_id
 
 
+def _will_retry(task, exc: Exception) -> bool:  # type: ignore[no-untyped-def]
+    """Mirrors what Celery's autoretry machinery is about to decide.
+
+    Needed because a failure must only be reported to the user once the task has
+    genuinely given up. Recording it on the first of four attempts would flash a
+    failure in the UI that a retry then silently contradicts.
+    """
+    if isinstance(exc, RETRY_KWARGS["dont_autoretry_for"]):
+        return False
+    return int(getattr(task.request, "retries", 0)) < int(RETRY_KWARGS["max_retries"])
+
+
+def _fail_feedback(story_id: str, feedback_id: str, exc: Exception) -> None:
+    """Record an interpretation failure and hand the story back to the user.
+
+    Runs in its own session: the failure path exists precisely because the main
+    transaction rolled back, so anything written inside that transaction is gone.
+    """
+    try:
+        with session_scope() as session:
+            feedback = session.get(Feedback, feedback_id)
+            if feedback is not None:
+                feedback.status = FeedbackStatus.FAILED
+                feedback.error = str(exc)[:2000]
+                session.add(feedback)
+
+            story = session.get(Story, story_id)
+            # Only undo the `generating` the API set for this request. If a
+            # regeneration is already running, leave it alone.
+            if story and story.status == StoryStatus.GENERATING:
+                story.status = StoryStatus.READY
+                session.add(story)
+            session.commit()
+    except Exception:
+        log.exception("feedback_failure_not_recorded", feedback_id=feedback_id)
+
+    repo.publish(
+        story_id,
+        {
+            "type": "feedback",
+            "status": FeedbackStatus.FAILED.value,
+            "feedback_id": feedback_id,
+            "error": str(exc)[:500],
+        },
+    )
+
+
 @celery_app.task(name=TaskName.INTERPRET_FEEDBACK.value, bind=True, **RETRY_KWARGS)
 def interpret_feedback(  # type: ignore[no-untyped-def]
     self, story_id: str, version_id: str, user_id: str, feedback_id: str
@@ -684,6 +754,17 @@ def interpret_feedback(  # type: ignore[no-untyped-def]
     different legitimate stage.
     """
     init_tracing()
+    try:
+        return _interpret_feedback(story_id, version_id, user_id, feedback_id)
+    except Exception as exc:
+        if not _will_retry(self, exc):
+            _fail_feedback(story_id, feedback_id, exc)
+        raise
+
+
+def _interpret_feedback(
+    story_id: str, version_id: str, user_id: str, feedback_id: str
+) -> str:
     from daastaan_contracts.models import RegenDirective
 
     with session_scope() as session:
@@ -756,6 +837,8 @@ def interpret_feedback(  # type: ignore[no-untyped-def]
 
         feedback.directive_json = directive.model_dump()
         feedback.resulting_version_id = child.id
+        feedback.status = FeedbackStatus.APPLIED
+        feedback.error = None
         story = session.get(Story, story_id)
         if story:
             story.current_version_id = child.id
@@ -763,6 +846,18 @@ def interpret_feedback(  # type: ignore[no-untyped-def]
         session.commit()
         new_version_id = child.id
 
+    repo.publish(
+        story_id,
+        {
+            "type": "feedback",
+            "status": FeedbackStatus.APPLIED.value,
+            "feedback_id": feedback_id,
+            "version_id": new_version_id,
+            "scope": scope.value,
+            "target_stage": target_stage.value,
+            "target_id": target_id,
+        },
+    )
     regenerate.si(
         story_id, new_version_id, user_id, [s.value for s in planned], scope.value,
         target_id, directive.instruction_delta,

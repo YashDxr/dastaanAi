@@ -110,6 +110,16 @@ class FeedbackRequest(BaseModel):
     target_id: str | None = Field(default=None, max_length=64)
 
 
+class FeedbackOut(BaseModel):
+    id: str
+    raw_text: str
+    status: str
+    error: str | None
+    directive_json: dict[str, Any] | None
+    resulting_version_id: str | None
+    created_at: datetime
+
+
 class RegenerateRequest(BaseModel):
     """The explicit, button-driven path. Deterministic, so it is the safe route
     to use during a live demo."""
@@ -153,12 +163,141 @@ class CostSummaryOut(BaseModel):
     total_usd: float
     budget_cap_usd: float
     remaining_usd: float
+    # What the cache hits would have cost. Inferred from the average price of
+    # comparable paid calls, so it is an estimate rather than a ledger figure.
+    cache_savings_usd: float = 0.0
+    cache_hits: int = 0
     by_stage: list[CostRow]
     by_model: list[CostRow]
 
 
 class RoleUpdate(BaseModel):
     role: str
+
+
+# --- admin analytics --------------------------------------------------------
+
+
+class RunSummaryOut(BaseModel):
+    """One `StoryVersion` execution, rolled up from jobs and the cost ledger."""
+
+    version_id: str
+    story_id: str
+    story_title: str | None
+    user_id: str | None
+    user_email: str | None
+    version_number: int
+    genre: str | None
+    mood: str | None
+    is_regen: bool
+    regen_scope: str | None
+    regen_stage: str | None
+    status: str
+    created_at: datetime
+    started_at: datetime | None
+    finished_at: datetime | None
+    duration_ms: int | None
+    stage_count: int
+    calls: int
+    cost_usd: float
+    input_tokens: int
+    output_tokens: int
+    cache_hits: int
+    error: str | None
+
+
+class RunStageOut(BaseModel):
+    stage: str
+    status: str
+    attempt: int
+    started_at: datetime | None
+    finished_at: datetime | None
+    duration_ms: int | None
+    error: str | None
+    cost_usd: float
+    input_tokens: int
+    output_tokens: int
+    calls: int
+    cache_hits: int
+
+
+class ModelCostOut(BaseModel):
+    label: str
+    calls: int
+    cost_usd: float
+    input_tokens: int
+    output_tokens: int
+    cache_hits: int
+
+
+class AssetCountOut(BaseModel):
+    kind: str
+    count: int
+    duration_ms: int
+
+
+class RunDetailOut(BaseModel):
+    version_id: str
+    story_id: str
+    story_title: str | None
+    user_id: str | None
+    user_email: str | None
+    version_number: int
+    genre: str | None
+    mood: str | None
+    parent_version_id: str | None
+    is_regen: bool
+    directive: dict[str, Any] | None
+    feedback_text: str | None
+    status: str
+    created_at: datetime
+    started_at: datetime | None
+    finished_at: datetime | None
+    duration_ms: int | None
+    cost_usd: float
+    input_tokens: int
+    output_tokens: int
+    calls: int
+    cache_hits: int
+    stages: list[RunStageOut]
+    by_model: list[ModelCostOut]
+    assets: list[AssetCountOut]
+
+
+class UserSummaryOut(BaseModel):
+    id: str
+    email: str
+    role: str
+    created_at: datetime
+    stories: int
+    calls: int
+    cost_usd: float
+    input_tokens: int
+    output_tokens: int
+    cache_hits: int
+    last_active_at: datetime | None
+
+
+class DailySpendOut(BaseModel):
+    day: str
+    cost_usd: float
+    calls: int
+
+
+class StorySpendOut(BaseModel):
+    story_id: str
+    title: str | None
+    cost_usd: float
+    calls: int
+
+
+class UserCostDetailOut(BaseModel):
+    user: UserSummaryOut
+    daily: list[DailySpendOut]
+    by_stage: list[CostRow]
+    by_model: list[CostRow]
+    by_story: list[StorySpendOut]
+    cache_savings_usd: float
 
 
 StoryDetailOut.model_rebuild()

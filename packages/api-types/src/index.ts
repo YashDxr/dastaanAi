@@ -76,8 +76,33 @@ export async function apiFetch<T>(path: string, init: RequestInit = {}): Promise
   return response.status === 204 ? (undefined as T) : ((await response.json()) as T)
 }
 
-/** Live progress for a story. Falls back to polling `/stories/{id}/jobs` if the
- * socket cannot be established, which is the reliable path on venue wifi. */
+/**
+ * Live progress for a story over server-sent events.
+ *
+ * Preferred over the WebSocket below because it is an ordinary same-origin GET:
+ * the session cookie travels with it, and the browser handles reconnection
+ * itself. Callers still need a polling fallback for the case where the stream
+ * cannot be established at all.
+ */
+export function openProgressStream(
+  storyId: string,
+  handlers: { onEvent: (event: unknown) => void; onOpen?: () => void; onError?: () => void },
+): EventSource {
+  const source = new EventSource(`/api/stories/${storyId}/events`, { withCredentials: true })
+  source.onmessage = (message) => {
+    try {
+      handlers.onEvent(JSON.parse(message.data))
+    } catch {
+      // Ignore malformed frames rather than tearing down the stream.
+    }
+  }
+  if (handlers.onOpen) source.onopen = handlers.onOpen
+  if (handlers.onError) source.onerror = handlers.onError
+  return source
+}
+
+/** Live progress over WebSocket. Retained for non-browser clients and as a
+ * migration path; the web app uses `openProgressStream`. */
 export function openProgressSocket(storyId: string, onEvent: (event: unknown) => void): WebSocket {
   const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
   const socket = new WebSocket(`${protocol}//${window.location.host}/ws/stories/${storyId}`)

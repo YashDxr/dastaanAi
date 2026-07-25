@@ -1,11 +1,12 @@
 from daastaan_common.models import Feedback, StoryVersion
-from daastaan_contracts import limits
+from daastaan_contracts import FeedbackStatus, StoryStatus, limits
 from fastapi import APIRouter, HTTPException, status
+from sqlmodel import select
 
 from ..deps import CurrentUser, OwnedStory, SessionDep
 from ..dispatch import dispatch_feedback_interpretation
 from ..guards import audit, enforce_budget, enforce_rate_limit
-from ..schemas import FeedbackRequest
+from ..schemas import FeedbackOut, FeedbackRequest
 
 router = APIRouter(prefix="/stories", tags=["feedback"])
 
@@ -33,9 +34,16 @@ def submit_feedback(
         version_id=story.current_version_id,
         user_id=user.id,
         raw_text=body.raw_text,
+        status=FeedbackStatus.PENDING,
     )
     session.add(feedback)
     session.flush()
+
+    # Marked generating here rather than in the worker. The client refreshes as
+    # soon as this 202 lands, and if the story still read `ready` at that moment
+    # it would never start watching progress - the interpretation would run to
+    # completion behind a UI that thought nothing was happening.
+    story.status = StoryStatus.GENERATING
 
     audit(session, actor_user_id=user.id, action="story.feedback", target_type="feedback",
           target_id=feedback.id)
@@ -48,3 +56,26 @@ def submit_feedback(
         feedback_id=feedback.id,
     )
     return {"feedback_id": feedback.id, "task_id": task_id}
+
+
+@router.get("/{story_id}/feedback", response_model=list[FeedbackOut])
+def list_feedback(story: OwnedStory, session: SessionDep) -> list[FeedbackOut]:
+    """Revision history for the story.
+
+    Carries the interpreted directive and any failure reason, so the studio can
+    tell the user what their note was understood to mean instead of leaving them
+    guessing whether it landed.
+    """
+    versions = session.exec(
+        select(StoryVersion.id).where(StoryVersion.story_id == story.id)
+    ).all()
+    if not versions:
+        return []
+
+    rows = session.exec(
+        select(Feedback)
+        .where(Feedback.version_id.in_(versions))  # type: ignore[attr-defined]
+        .order_by(Feedback.created_at.desc())  # type: ignore[attr-defined]
+        .limit(20)
+    ).all()
+    return [FeedbackOut.model_validate(row, from_attributes=True) for row in rows]

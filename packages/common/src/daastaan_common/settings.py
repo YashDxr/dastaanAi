@@ -55,6 +55,13 @@ class Settings(BaseSettings):
     # --- broker -----------------------------------------------------------
     redis_url: str = "redis://localhost:6379/0"
 
+    # --- response cache ---------------------------------------------------
+    # Content-addressed and global: the key covers every input that determines
+    # the output, so a hit can only be served to a byte-identical request.
+    # Turn it off to force fresh generations while tuning prompts.
+    cache_enabled: bool = True
+    cache_ttl_seconds: int = 60 * 60 * 24 * 14
+
     # --- OpenAI -----------------------------------------------------------
     openai_api_key: str | None = None
     model_reasoning: str = "gpt-4o"
