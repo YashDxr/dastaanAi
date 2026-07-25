@@ -1,27 +1,35 @@
 .DEFAULT_GOAL := help
 SHELL := /bin/bash
 
-# The virtualenv lives outside the repo.
-#
-# This checkout sits in an iCloud-synced folder, and iCloud both syncs the
-# thousands of files in a venv and re-applies the macOS "hidden" flag to the
-# editable-install .pth files. Python's site module skips hidden .pth files, so
-# workspace packages intermittently vanish with a confusing ModuleNotFoundError.
-# Keeping the environment out of the synced tree removes the problem entirely.
-#
-# Override with: make UV_PROJECT_ENVIRONMENT=/some/other/path
+# The virtualenv lives outside the repo (iCloud-safe). Override if needed.
 UV_PROJECT_ENVIRONMENT ?= $(HOME)/.venvs/daastaan
 export UV_PROJECT_ENVIRONMENT
 
-# Local runs need localhost instead of the Compose service hostnames.
-LOCAL_ENV := DATABASE_URL=postgresql+psycopg://daastaan:daastaan@localhost:5432/daastaan \
+# Local runs need localhost instead of Compose service hostnames.
+# DB name matches the DBeaver database on this machine (dastaanai).
+LOCAL_ENV := DATABASE_URL=postgresql+psycopg://yashsingh@localhost:5432/dastaanai \
              REDIS_URL=redis://localhost:6379/0 \
              LOCAL_MEDIA_DIR=./.media
+
+# Read POSTGRES_MODE from .env (default docker). host = skip Compose Postgres.
+POSTGRES_MODE := $(shell sed -n 's/^POSTGRES_MODE=//p' .env 2>/dev/null | tail -1)
+ifeq ($(strip $(POSTGRES_MODE)),)
+POSTGRES_MODE := docker
+endif
+
+# Compose profile flags derived from POSTGRES_MODE.
+ifeq ($(POSTGRES_MODE),host)
+COMPOSE_POSTGRES_FLAGS :=
+else
+COMPOSE_POSTGRES_FLAGS := --profile postgres
+endif
 
 .PHONY: help
 help: ## Show this help
 	@grep -hE '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) \
-		| awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-16s\033[0m %s\n", $$1, $$2}'
+		| awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-20s\033[0m %s\n", $$1, $$2}'
+	@echo
+	@echo "  POSTGRES_MODE=$(POSTGRES_MODE)  (from .env; docker|host)"
 
 # --- setup -----------------------------------------------------------------
 
@@ -34,10 +42,6 @@ sync: ## Install/refresh the Python workspace
 	uv sync --all-packages
 	@$(MAKE) --no-print-directory fix-pth
 
-# Safety net for the hidden-.pth problem described at the top of this file.
-# Should be unnecessary now the environment lives outside the synced folder, but
-# it is cheap and saves a confusing debugging session if that changes. No-op on
-# Linux, where chflags does not exist.
 .PHONY: fix-pth
 fix-pth:
 	@if [ "$$(uname)" = "Darwin" ] && [ -d "$(UV_PROJECT_ENVIRONMENT)/lib" ]; then \
@@ -52,28 +56,72 @@ node-setup: ## Install JS workspace dependencies
 # --- docker ----------------------------------------------------------------
 
 .PHONY: up
-up: ## Start the full backend stack
-	docker compose up -d --build
+up: ## Start backend (honours POSTGRES_MODE=docker|host)
+	docker compose $(COMPOSE_POSTGRES_FLAGS) up -d --build
 
 .PHONY: infra
-infra: ## Start only Postgres and Redis (for running services on the host)
-	docker compose up -d postgres redis
+infra: ## Start Redis (+ Postgres when POSTGRES_MODE=docker)
+	docker compose $(COMPOSE_POSTGRES_FLAGS) up -d redis $(if $(filter docker,$(POSTGRES_MODE)),postgres,)
+
+.PHONY: tools
+tools: ## Redis Insight (:5540) + Flower (:5555)
+	docker compose --profile tools up -d redis-insight flower
+
+.PHONY: observe
+observe: ## Loki + Promtail + Grafana (:3000). Prefer LOG_JSON=true
+	docker compose --profile observability up -d
+	@echo "Grafana: http://localhost:3000  (admin/admin)"
+	@echo "Explore → Loki → {compose_project=\"daastaan\"} |= \"request_id\""
 
 .PHONY: down
-down: ## Stop the stack
-	docker compose down
+down: ## Stop the stack (all profiles)
+	docker compose --profile postgres --profile tools --profile observability down
 
 .PHONY: nuke
 nuke: ## Stop the stack and delete all data volumes
-	docker compose down -v
-
-.PHONY: logs
-logs: ## Tail logs from every service
-	docker compose logs -f --tail=100
+	docker compose --profile postgres --profile tools --profile observability down -v
 
 .PHONY: ps
 ps: ## Show container status
-	docker compose ps
+	docker compose ps -a
+
+# --- logs (one command per service) ----------------------------------------
+
+.PHONY: logs
+logs: ## Tail logs from every running service
+	docker compose logs -f --tail=100
+
+.PHONY: logs-api
+logs-api: ## Tail API logs
+	docker compose logs -f --tail=200 api
+
+.PHONY: logs-agent
+logs-agent: ## Tail agent service logs
+	docker compose logs -f --tail=200 agent
+
+.PHONY: logs-worker-agents
+logs-worker-agents: ## Tail agents-queue worker logs
+	docker compose logs -f --tail=200 worker-agents
+
+.PHONY: logs-worker-media
+logs-worker-media: ## Tail media-queue worker logs
+	docker compose logs -f --tail=200 worker-media
+
+.PHONY: logs-worker-assembly
+logs-worker-assembly: ## Tail assembly-queue worker logs
+	docker compose logs -f --tail=200 worker-assembly
+
+.PHONY: logs-postgres
+logs-postgres: ## Tail Postgres logs (POSTGRES_MODE=docker only)
+	docker compose logs -f --tail=200 postgres
+
+.PHONY: logs-redis
+logs-redis: ## Tail Redis logs
+	docker compose logs -f --tail=200 redis
+
+.PHONY: logs-workers
+logs-workers: ## Tail all three Celery workers
+	docker compose logs -f --tail=200 worker-agents worker-media worker-assembly
 
 # --- running on the host ---------------------------------------------------
 

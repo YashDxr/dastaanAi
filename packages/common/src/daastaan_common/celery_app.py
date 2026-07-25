@@ -8,12 +8,15 @@ both sides still agree on the wire format via `daastaan_contracts.TaskName`.
 from celery import Celery
 from daastaan_contracts import Queue, TaskName
 
+from .request_id import RequestIdTask
 from .settings import get_settings
 
 
 def create_celery(name: str = "daastaan") -> Celery:
     settings = get_settings()
     app = Celery(name, broker=settings.redis_url, backend=settings.redis_url)
+    # Every task binds/propagates X-Request-ID via Celery headers.
+    app.Task = RequestIdTask
 
     app.conf.update(
         task_serializer="json",
