@@ -36,6 +36,7 @@ from tenacity import retry, retry_if_exception, stop_after_attempt, wait_exponen
 
 from . import pricing
 from .assembly import probe_duration_ms
+from .tracing import langfuse_span, trace_metadata
 
 log = structlog.get_logger(__name__)
 
@@ -163,27 +164,35 @@ class ModelGateway:
         ever interpolated into the instruction string.
         """
         model = self._resolve_model(kind)
-        completion = self.client.chat.completions.parse(
-            model=model,
-            messages=[
-                {"role": "system", "content": system},
-                {"role": "user", "content": user_content},
-            ],
-            response_format=schema,
-            temperature=temperature,
-        )
+        with langfuse_span(
+            name=f"structured:{self.stage}",
+            metadata=trace_metadata(stage=self.stage, model=model),
+        ) as span:
+            completion = self.client.chat.completions.parse(
+                model=model,
+                messages=[
+                    {"role": "system", "content": system},
+                    {"role": "user", "content": user_content},
+                ],
+                response_format=schema,
+                temperature=temperature,
+            )
 
-        usage = completion.usage
-        self._record(
-            model=model,
-            input_tokens=usage.prompt_tokens if usage else 0,
-            output_tokens=usage.completion_tokens if usage else 0,
-            cost_usd=pricing.chat_cost(
-                model,
-                usage.prompt_tokens if usage else 0,
-                usage.completion_tokens if usage else 0,
-            ),
-        )
+            usage = completion.usage
+            input_tokens = usage.prompt_tokens if usage else 0
+            output_tokens = usage.completion_tokens if usage else 0
+            cost = pricing.chat_cost(model, input_tokens, output_tokens)
+            self._record(
+                model=model,
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
+                cost_usd=cost,
+            )
+            span.update(metadata=trace_metadata(
+                stage=self.stage, model=model,
+                input_tokens=input_tokens, output_tokens=output_tokens,
+                cost_usd=cost,
+            ))
 
         parsed = completion.choices[0].message.parsed
         if parsed is None:
@@ -214,35 +223,52 @@ class ModelGateway:
         reason to move uncompressed audio around.
         """
         model = self._resolve_model("tts")
-        response = self.client.audio.speech.create(
-            model=model,
-            voice=voice,  # type: ignore[arg-type]
-            input=text,
-            instructions=instructions,
-            response_format="mp3",
-        )
-        audio = response.read()
-        duration_ms = probe_duration_ms(audio)
+        with langfuse_span(
+            name=f"speech:{self.stage}",
+            metadata=trace_metadata(stage=self.stage, model=model),
+        ) as span:
+            response = self.client.audio.speech.create(
+                model=model,
+                voice=voice,  # type: ignore[arg-type]
+                input=text,
+                instructions=instructions,
+                response_format="mp3",
+            )
+            audio = response.read()
+            duration_ms = probe_duration_ms(audio)
+            cost = pricing.tts_cost(duration_ms)
 
-        self._record(
-            model=model,
-            cost_usd=pricing.tts_cost(duration_ms),
-            unit_count=duration_ms / 1000,
-            is_estimated=True,  # the speech endpoint returns no usage object
-        )
+            self._record(
+                model=model,
+                cost_usd=cost,
+                unit_count=duration_ms / 1000,
+                is_estimated=True,
+            )
+            span.update(metadata=trace_metadata(
+                stage=self.stage, model=model,
+                duration_ms=duration_ms, cost_usd=cost,
+            ))
         return audio, duration_ms
 
     @_RETRY
     def image(self, *, prompt: str, size: str = "1024x1024") -> bytes:
         model = self._resolve_model("image")
-        response = self.client.images.generate(
-            model=model, prompt=prompt, size=size, n=1, quality="medium"  # type: ignore[arg-type]
-        )
-        payload = response.data[0].b64_json
-        if not payload:
-            raise ValueError("image response contained no data")
+        with langfuse_span(
+            name=f"image:{self.stage}",
+            metadata=trace_metadata(stage=self.stage, model=model),
+        ) as span:
+            response = self.client.images.generate(
+                model=model, prompt=prompt, size=size, n=1, quality="medium"  # type: ignore[arg-type]
+            )
+            payload = response.data[0].b64_json
+            if not payload:
+                raise ValueError("image response contained no data")
 
-        self._record(model=model, cost_usd=pricing.image_cost(1), unit_count=1)
+            cost = pricing.image_cost(1)
+            self._record(model=model, cost_usd=cost, unit_count=1)
+            span.update(metadata=trace_metadata(
+                stage=self.stage, model=model, cost_usd=cost,
+            ))
         return base64.b64decode(payload)
 
 

@@ -15,6 +15,7 @@ class StageName(StrEnum):
     TTS_SYNTHESIS = "tts_synthesis"
     IMAGE_GENERATION = "image_generation"
     ASSEMBLY = "assembly"
+    VIDEO_COMPOSITION = "video_composition"
 
 
 class Scope(StrEnum):
@@ -64,3 +65,4 @@ class AssetKind(StrEnum):
     SCENE_IMAGE = "scene_image"
     MUSIC_BED = "music_bed"
     FINAL_EPISODE = "final_episode"
+    FINAL_VIDEO = "final_video"

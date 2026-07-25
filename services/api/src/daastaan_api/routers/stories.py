@@ -62,7 +62,9 @@ def create_story(
         version_id=version.id,
         user_id=user.id,
         raw_text=body.raw_text,
+        language=body.language,
         genre_hint=body.genre_hint,
+        output_format=body.output_format,
     ).model_dump(mode="json")
     story.current_version_id = version.id
 

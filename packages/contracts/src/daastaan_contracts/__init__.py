@@ -5,6 +5,7 @@ the frontends. Deliberately depends only on Pydantic so that adding it to a
 service never drags in a database driver or an LLM SDK.
 """
 
+from .languages import language_name
 from .enums import (
     AssetKind,
     CharacterRole,
@@ -46,6 +47,7 @@ from .tasks import STAGE_QUEUE, Queue, TaskName, progress_channel
 
 __all__ = [
     "AGENT_STAGES",
+    "language_name",
     "FANOUT_STAGES",
     "PIPELINE_STAGES",
     "STAGE_QUEUE",
