@@ -166,6 +166,30 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/stories/{story_id}/versions/{version_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Version
+         * @description Load a historical version's immutable timeline for the Time Machine.
+         *
+         *     The story dependency has already checked ownership. The additional story-id
+         *     predicate prevents a caller who knows another version UUID from using this
+         *     route to read it or to make it a fork parent.
+         */
+        get: operations["get_version_api_stories__story_id__versions__version_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/stories/{story_id}/jobs": {
         parameters: {
             query?: never;
@@ -1007,6 +1031,10 @@ export interface components {
              * @default
              */
             instruction_delta: string;
+            /** Base Version Id */
+            base_version_id?: string | null;
+            /** Expected Current Version Id */
+            expected_current_version_id?: string | null;
         };
         /** RoleUpdate */
         RoleUpdate: {
@@ -1562,6 +1590,38 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["VersionOut"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_version_api_stories__story_id__versions__version_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                version_id: string;
+                story_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StoryDetailOut"];
                 };
             };
             /** @description Validation Error */

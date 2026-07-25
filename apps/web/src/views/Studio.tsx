@@ -320,13 +320,16 @@ export function Studio({ user, storyId, onLogout, onHome, onCompose }: Props) {
                     onRequested={refresh}
                   />
                 )}
-                {detail.story.status === 'ready' && state && state.scenes.length > 0 && state.lines.length > 0 && (
-                  <ConsistencyPanel
-                    storyId={storyId}
-                    state={state}
-                    disabled={busy || regenerating}
-                  />
-                )}
+                {detail.story.status === 'ready' &&
+                  state &&
+                  state.scenes.length > 0 &&
+                  state.lines.length > 0 && (
+                    <ConsistencyPanel
+                      storyId={storyId}
+                      state={state}
+                      disabled={busy || regenerating}
+                    />
+                  )}
                 <FeedbackComposer
                   disabled={busy || regenerating}
                   interpreting={interpreting}
