@@ -44,6 +44,8 @@ class SceneFrame:
     image: bytes
     duration_ms: int
     scene_id: str
+    text: str = ""
+    speaker: str = ""
 
 
 def ffmpeg_path() -> str:
@@ -250,11 +252,65 @@ def build_scene_timeline(
     return timeline
 
 
+_DRAWTEXT_FONT = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
+_DRAWTEXT_WRAP = 45
+
+
+def _wrap_text(text: str, width: int = _DRAWTEXT_WRAP) -> str:
+    """Wrap text at word boundaries to fit within width characters."""
+    words = text.split()
+    lines: list[str] = []
+    current: list[str] = []
+    length = 0
+    for word in words:
+        needed = len(word) if not current else 1 + len(word)
+        if current and length + needed > width:
+            lines.append(" ".join(current))
+            current = [word]
+            length = len(word)
+        else:
+            current.append(word)
+            length += needed
+    if current:
+        lines.append(" ".join(current))
+    return "\n".join(lines)
+
+
+def _escape_textfile_path(path: str) -> str:
+    """Escape characters that are special in ffmpeg filter option values."""
+    # In filter_complex, these characters have structural meaning and must be
+    # escaped with a backslash when they appear in an option value.
+    for ch in ("\\", "'", ":", ";", "[", "]"):
+        path = path.replace(ch, f"\\{ch}")
+    return path
+
+
+ZOOMPAN_FPS = 25
+XFADE_DURATION = 0.5
+VIDEO_WIDTH = 1280
+VIDEO_HEIGHT = 720
+
+# Zoompan motion presets, cycled across frames.
+# Each is a (z_expr, x_expr, y_expr) tuple for the zoompan filter.
+_ZOOM_PRESETS: list[tuple[str, str, str]] = [
+    # zoom-in: slow zoom from 1.0 to 1.15
+    ("min(zoom+0.0005,1.15)", "iw/2-(iw/zoom/2)", "ih/2-(ih/zoom/2)"),
+    # zoom-out: start zoomed in, pull back
+    ("if(eq(on,1),1.15,max(zoom-0.0005,1.0))", "iw/2-(iw/zoom/2)", "ih/2-(ih/zoom/2)"),
+    # pan-left: fixed zoom, pan from right to left
+    ("1.1", "if(eq(on,1),iw/4,max(x-0.5,0))", "ih/2-(ih/zoom/2)"),
+    # pan-right: fixed zoom, pan from left to right
+    ("1.1", "if(eq(on,1),0,min(x+0.5,iw/4))", "ih/2-(ih/zoom/2)"),
+]
+
+
 def compose_video(audio: bytes, scene_frames: list[SceneFrame]) -> bytes:
     """Combine a final audio track with scene images into an MP4 video.
 
-    Uses the same safety pattern as ``compose_episode``: temp directory, argv
-    list, no ``shell=True``, no model output in paths.
+    Each image gets a Ken Burns zoompan effect. When there are multiple frames,
+    consecutive clips are joined with crossfade transitions. Uses the same
+    safety pattern as ``compose_episode``: temp directory, argv list, no
+    ``shell=True``, no model output in paths.
     """
     if not scene_frames:
         raise AssemblyError("cannot compose video with no scene frames")
@@ -266,43 +322,90 @@ def compose_video(audio: bytes, scene_frames: list[SceneFrame]) -> bytes:
         audio_path = workdir / "audio.mp3"
         audio_path.write_bytes(audio)
 
-        # Write images and build concat demuxer file
-        concat_lines: list[str] = []
+        n = len(scene_frames)
+        inputs: list[str] = []
+        filters: list[str] = []
+
+        # Phase 1: write images and create zoompan + drawtext filters
         for idx, frame in enumerate(scene_frames):
             img_path = workdir / f"frame_{idx:04d}.png"
             img_path.write_bytes(frame.image)
+            inputs += ["-i", str(img_path)]
+
             duration_s = max(frame.duration_ms, 1) / 1000
-            concat_lines.append(f"file '{img_path.name}'")
-            concat_lines.append(f"duration {duration_s:.3f}")
+            # Add overlap material for xfade (except last frame)
+            if n > 1 and idx < n - 1:
+                duration_s += XFADE_DURATION
+            total_frames = int(duration_s * ZOOMPAN_FPS)
 
-        # ffmpeg concat demuxer needs the last file repeated without duration
-        if concat_lines:
-            last_file_line = concat_lines[-2]  # the last 'file' line
-            concat_lines.append(last_file_line)
+            z_expr, x_expr, y_expr = _ZOOM_PRESETS[idx % len(_ZOOM_PRESETS)]
+            # Scale source to square so zoompan has room to pan, then output at target size
+            zp_out = f"zp{idx}"
+            filters.append(
+                f"[{idx}:v]scale=1280:1280:force_original_aspect_ratio=increase,"
+                f"crop=1280:1280,"
+                f"zoompan=z='{z_expr}':x='{x_expr}':y='{y_expr}'"
+                f":d={total_frames}:s={VIDEO_WIDTH}x{VIDEO_HEIGHT}:fps={ZOOMPAN_FPS}"
+                f"[{zp_out}]"
+            )
 
-        concat_path = workdir / "concat.txt"
-        concat_path.write_text("\n".join(concat_lines))
+            # Burned-in caption via drawtext (uses textfile to avoid escaping issues)
+            if frame.text:
+                caption = _wrap_text(frame.text)
+                if frame.speaker:
+                    caption = f"{frame.speaker}: {caption}"
+                txt_path = workdir / f"caption_{idx:04d}.txt"
+                txt_path.write_text(caption, encoding="utf-8")
+                escaped_path = _escape_textfile_path(str(txt_path))
+                df_out = f"df{idx}"
+                filters.append(
+                    f"[{zp_out}]drawtext=textfile={escaped_path}"
+                    f":fontfile={_DRAWTEXT_FONT}"
+                    f":fontsize=28:fontcolor=white:borderw=2:bordercolor=black"
+                    f":x=(w-text_w)/2:y=h-th-50"
+                    f":box=1:boxcolor=black@0.5:boxborderw=8[{df_out}]"
+                )
+        # Collect final per-frame labels for xfade chaining
+        frame_labels: list[str] = []
+        for idx, frame in enumerate(scene_frames):
+            frame_labels.append(f"df{idx}" if frame.text else f"zp{idx}")
+
+        # Phase 2: xfade transitions between consecutive clips
+        if n == 1:
+            last_label = frame_labels[0]
+        else:
+            cumulative_s = 0.0
+            prev_label = frame_labels[0]
+            for i in range(1, n):
+                cumulative_s += max(scene_frames[i - 1].duration_ms, 1) / 1000
+                out_label = f"xf{i - 1}" if i < n - 1 else "vout"
+                filters.append(
+                    f"[{prev_label}][{frame_labels[i]}]xfade=transition=fade"
+                    f":duration={XFADE_DURATION}:offset={cumulative_s:.3f}[{out_label}]"
+                )
+                prev_label = out_label
+            last_label = "vout"
+
+        # Audio input is the last -i
+        inputs += ["-i", str(audio_path)]
 
         output = workdir / "video.mp4"
-        vf = (
-            "scale=1280:720:force_original_aspect_ratio=decrease,"
-            "pad=1280:720:(ow-iw)/2:(oh-ih)/2"
-        )
         command = [
             ffmpeg_path(), "-hide_banner", "-loglevel", "error", "-y",
-            "-f", "concat", "-safe", "0", "-i", str(concat_path),
-            "-i", str(audio_path),
-            "-vf", vf,
+            *inputs,
+            "-filter_complex", ";".join(filters),
+            "-map", f"[{last_label}]",
+            "-map", f"{n}:a",
             "-c:v", "libx264", "-pix_fmt", "yuv420p",
             "-c:a", "aac",
             "-shortest",
             str(output),
         ]
 
-        result = subprocess.run(command, capture_output=True, text=True, timeout=600)  # noqa: S603
+        result = subprocess.run(command, capture_output=True, text=True, timeout=900)  # noqa: S603
         if result.returncode != 0:
             log.error("ffmpeg_video_failed", stderr=result.stderr[-2000:])
             raise AssemblyError(f"ffmpeg exited {result.returncode}: {result.stderr[-500:]}")
 
-        log.info("video_composed", frames=len(scene_frames))
+        log.info("video_composed", frames=n)
         return output.read_bytes()
