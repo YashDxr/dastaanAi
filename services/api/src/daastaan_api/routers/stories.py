@@ -1,5 +1,14 @@
+from daastaan_common import carry_over_assets
 from daastaan_common.models import Job, MediaAsset, Story, StoryVersion
-from daastaan_contracts import Scope, StageName, StoryState, StoryStatus, limits, plan_stages
+from daastaan_contracts import (
+    PIPELINE_STAGES,
+    Scope,
+    StageName,
+    StoryState,
+    StoryStatus,
+    limits,
+    plan_stages,
+)
 from fastapi import APIRouter, HTTPException, status
 from sqlmodel import select
 
@@ -123,12 +132,34 @@ def get_progress(story: OwnedStory, session: SessionDep) -> ProgressOut:
         .where(Job.version_id == story.current_version_id)
         .order_by(Job.created_at)
     ).all()
+    version = (
+        session.get(StoryVersion, story.current_version_id)
+        if story.current_version_id
+        else None
+    )
     return ProgressOut(
         story_id=story.id,
         version_id=story.current_version_id,
         status=story.status,
+        planned_stages=[stage.value for stage in _planned_stages(version)],
         jobs=[JobOut.model_validate(job, from_attributes=True) for job in jobs],
     )
+
+
+def _planned_stages(version: StoryVersion | None) -> tuple[StageName, ...]:
+    """What this run is actually expected to do.
+
+    A regeneration only touches a slice of the pipeline, so reporting it against
+    all ten stages would show a mostly-empty bar and read as though the story had
+    been thrown away and restarted.
+    """
+    regen = (version.state_json or {}).get("regen") if version else None
+    if not regen:
+        return PIPELINE_STAGES
+    try:
+        return plan_stages(Scope(regen["scope"]), StageName(regen["target_stage"]))
+    except (KeyError, ValueError):
+        return PIPELINE_STAGES
 
 
 @router.post(
@@ -168,6 +199,16 @@ def regenerate(
     )
     session.add(child)
     session.flush()
+
+    carry_over_assets(
+        session,
+        parent_version_id=parent.id,
+        child_version_id=child.id,
+        state=StoryState.model_validate(parent.state_json),
+        scope=Scope(body.scope),
+        planned=stages,
+        target_id=body.target_id,
+    )
 
     child.state_json["version_id"] = child.id
     child.state_json["regen"] = {

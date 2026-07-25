@@ -1,14 +1,11 @@
-# One Postgres, one Redis, one image, five Python processes.
+# One Redis, optional Compose Postgres, one image, five Python processes.
 #
-# The worker pools are split by queue rather than scaled as one pool because the
-# work is not interchangeable: a ten-minute ffmpeg assembly must never sit behind
-# a backlog of TTS calls, and the media pool wants far more concurrency than the
-# CPU-bound assembly pool.
+# POSTGRES_MODE in .env controls the database:
+#   docker → `make up` enables the `postgres` Compose profile
+#   host   → use your laptop Postgres; containers reach it via host.docker.internal
 #
-# The `media` volume is shared by the API and every worker. With the local
-# storage backend the workers write audio to it and the API streams from it, so
-# they must see the same filesystem. Switching storage_backend to uc_volume makes
-# that volume redundant.
+# The media volume is shared by the API and every worker for the local storage
+# backend. Switching storage_backend to uc_volume makes that volume redundant.
 
 name: daastaan
 
@@ -20,14 +17,20 @@ x-python-image: &python-image
   volumes:
     - media:/data/media
   depends_on:
-    postgres:
-      condition: service_healthy
     redis:
       condition: service_healthy
   restart: unless-stopped
+  logging:
+    driver: json-file
+    options:
+      max-size: "10m"
+      max-file: "3"
+      labels: "service"
 
 services:
+  # Only started when the `postgres` profile is active (POSTGRES_MODE=docker).
   postgres:
+    profiles: ["postgres"]
     image: postgres:17-alpine
     environment:
       POSTGRES_USER: daastaan
@@ -42,6 +45,11 @@ services:
       interval: 5s
       timeout: 3s
       retries: 10
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
 
   redis:
     image: redis:8-alpine
@@ -55,9 +63,16 @@ services:
       interval: 5s
       timeout: 3s
       retries: 10
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
 
   api:
     <<: *python-image
+    labels:
+      service: api
     command:
       ["uvicorn", "daastaan_api.main:app", "--host", "0.0.0.0", "--port", "8000"]
     ports:
@@ -71,44 +86,106 @@ services:
 
   agent:
     <<: *python-image
+    labels:
+      service: agent
     command:
       ["uvicorn", "daastaan_agent.main:app", "--host", "0.0.0.0", "--port", "8100"]
     ports:
       - "8100:8100"
 
-  # Sequential LLM stages. Concurrency 4 lets several stories progress at once
-  # without any single story's stages overlapping - the chain enforces order.
   worker-agents:
     <<: *python-image
+    labels:
+      service: worker-agents
     command:
       ["celery", "-A", "daastaan_agent.worker", "worker",
        "-Q", "agents", "-c", "4", "-n", "agents@%h", "--loglevel", "info"]
 
-  # The per-line TTS and per-scene image fan-out. This is where the wall-clock
-  # time of a generation is actually decided.
   worker-media:
     <<: *python-image
+    labels:
+      service: worker-media
     command:
       ["celery", "-A", "daastaan_agent.worker", "worker",
        "-Q", "media", "-c", "6", "-n", "media@%h", "--loglevel", "info"]
 
-  # ffmpeg is CPU-bound; parallel assemblies would only contend for cores.
   worker-assembly:
     <<: *python-image
+    labels:
+      service: worker-assembly
     command:
       ["celery", "-A", "daastaan_agent.worker", "worker",
        "-Q", "assembly", "-c", "1", "-n", "assembly@%h", "--loglevel", "info"]
 
-  # Optional: `docker compose --profile tools up flower` for queue visibility.
+  # `docker compose --profile tools up -d` (or `make tools`)
   flower:
     <<: *python-image
     profiles: ["tools"]
+    labels:
+      service: flower
     command:
       ["celery", "-A", "daastaan_agent.worker", "flower", "--port=5555"]
     ports:
       - "5555:5555"
 
+  redis-insight:
+    profiles: ["tools"]
+    image: redis/redisinsight:latest
+    ports:
+      - "5540:5540"
+    volumes:
+      - redisinsight:/data
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # `docker compose --profile observability up -d` (or `make observe`)
+  loki:
+    profiles: ["observability"]
+    image: grafana/loki:3.4.2
+    command: ["-config.file=/etc/loki/loki-config.yml"]
+    ports:
+      - "3100:3100"
+    volumes:
+      - ./infra/observability/loki-config.yml:/etc/loki/loki-config.yml:ro
+      - lokidata:/loki
+    restart: unless-stopped
+
+  promtail:
+    profiles: ["observability"]
+    image: grafana/promtail:3.4.2
+    command: ["-config.file=/etc/promtail/promtail-config.yml"]
+    volumes:
+      - ./infra/observability/promtail-config.yml:/etc/promtail/promtail-config.yml:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro
+    depends_on:
+      - loki
+    restart: unless-stopped
+
+  grafana:
+    profiles: ["observability"]
+    image: grafana/grafana:11.5.2
+    ports:
+      - "3000:3000"
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: admin
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+      GF_USERS_DEFAULT_THEME: light
+    volumes:
+      - ./infra/observability/grafana/provisioning:/etc/grafana/provisioning:ro
+      - grafanadata:/var/lib/grafana
+    depends_on:
+      - loki
+    restart: unless-stopped
+
 volumes:
   pgdata:
   redisdata:
   media:
+  redisinsight:
+  lokidata:
+  grafanadata:

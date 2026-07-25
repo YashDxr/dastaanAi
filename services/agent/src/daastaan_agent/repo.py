@@ -14,9 +14,16 @@ import redis
 import structlog
 from daastaan_common import get_settings
 from daastaan_common.models import Job, MediaAsset, PipelineRun, Story, StoryVersion
-from daastaan_contracts import AssetKind, JobStatus, StageName, StoryState, progress_channel
+from daastaan_contracts import (
+    FANOUT_STAGES,
+    AssetKind,
+    JobStatus,
+    StageName,
+    StoryState,
+    progress_channel,
+)
 from sqlalchemy.exc import IntegrityError
-from sqlmodel import Session, select
+from sqlmodel import Session, col, select
 
 log = structlog.get_logger(__name__)
 
@@ -92,6 +99,27 @@ def finish_job(
         job.story_id,
         {"type": "stage", "stage": job.stage, "status": status.value, "error": job.error},
     )
+
+
+def close_fanout_jobs(
+    session: Session, version_id: str, *, status: JobStatus = JobStatus.SUCCEEDED
+) -> None:
+    """Settle the TTS and image rows opened by `fan_out`.
+
+    Those two stages are groups of subtasks rather than a single task, so nothing
+    inside them owns the stage row. `fan_out` opens the rows and the chord callback
+    closes them here - which is accurate, because the callback only runs once every
+    member of the group has finished.
+    """
+    jobs = session.exec(
+        select(Job).where(
+            Job.version_id == version_id,
+            col(Job.stage).in_([stage.value for stage in FANOUT_STAGES]),
+        )
+    ).all()
+    for job in jobs:
+        if job.status == JobStatus.RUNNING:
+            finish_job(session, job, status=status)
 
 
 def find_asset(
