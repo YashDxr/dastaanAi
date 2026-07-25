@@ -1,9 +1,13 @@
-import { useMemo, useState } from 'react'
+import { useCallback, useMemo, useState } from 'react'
 import { AppHeader } from '../components/AppHeader'
+import { UploadDropzone } from '../components/UploadDropzone'
 import { formatError, stories as storiesApi } from '../api'
-import type { User } from '../types'
+import type { Ingest, User } from '../types'
 
-const MAX_CHARS = 6000
+// Mirrors `limits.MAX_STORY_INPUT_CHARS` / `MIN` on the server, which rejects
+// anything outside this range. Keep the two in step: the counter here is a
+// courtesy, the server limit is the real one.
+const MAX_CHARS = 24000
 const MIN_CHARS = 20
 
 type Props = {
@@ -16,8 +20,10 @@ type Props = {
 export function Compose({ user, onLogout, onHome, onCreated }: Props) {
   const [text, setText] = useState('')
   const [genre, setGenre] = useState('')
+  const [outputFormat, setOutputFormat] = useState<'audio' | 'video' | 'both'>('audio')
   const [pending, setPending] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [imported, setImported] = useState<string | null>(null)
 
   const remaining = MAX_CHARS - text.length
   const ready = text.trim().length >= MIN_CHARS && !pending
@@ -28,6 +34,16 @@ export function Compose({ user, onLogout, onHome, onCreated }: Props) {
     if (n < MIN_CHARS) return `${MIN_CHARS - n} more characters to begin.`
     return 'Enough to cast. You can reshape later.'
   }, [text])
+
+  // The extracted text lands in the textarea rather than going straight to the
+  // pipeline. OCR and condensing can both go wrong in ways only the person who
+  // uploaded the file can see, and this is the last point before it costs money.
+  const onExtracted = useCallback((result: Ingest) => {
+    setText((result.cleaned_text ?? '').slice(0, MAX_CHARS))
+    setImported(result.notes)
+    setError(null)
+    setGenre((current) => current || result.genre_hint || '')
+  }, [])
 
   return (
     <div className="app-frame">
@@ -43,7 +59,8 @@ export function Compose({ user, onLogout, onHome, onCreated }: Props) {
           <p className="eyebrow">Compose</p>
           <h1>What should we stage tonight?</h1>
           <p className="lede">
-            Write freely. Daastaan will find the mood, cast the voices, and mix the episode.
+            Write freely, or bring a file. Daastaan will find the mood, cast the voices, and
+            mix the episode.
           </p>
         </section>
 
@@ -55,23 +72,33 @@ export function Compose({ user, onLogout, onHome, onCreated }: Props) {
             setPending(true)
             setError(null)
             void storiesApi
-              .create(text.trim(), genre.trim() || undefined)
+              .create(text.trim(), genre.trim() || undefined, outputFormat)
               .then((res) => onCreated(res.story_id))
               .catch((err) => setError(formatError(err)))
               .finally(() => setPending(false))
           }}
         >
+          <UploadDropzone disabled={pending} onExtracted={onExtracted} />
+
+          <div className="compose-divider">
+            <span>or write it yourself</span>
+          </div>
+
           <label className="compose-label">
             Your dream or memory
             <textarea
               value={text}
-              onChange={(e) => setText(e.target.value.slice(0, MAX_CHARS))}
+              onChange={(e) => {
+                setText(e.target.value.slice(0, MAX_CHARS))
+                setImported(null)
+              }}
               rows={12}
               placeholder="I woke up still hearing the rain on the tin roof…"
               required
               minLength={MIN_CHARS}
             />
           </label>
+          {imported && <p className="import-note">{imported} Edit anything before generating.</p>}
           <div className="compose-meta">
             <p className="hint">{hint}</p>
             <p className={`char-count ${remaining < 200 ? 'warn' : ''}`}>{remaining} left</p>
@@ -86,6 +113,28 @@ export function Compose({ user, onLogout, onHome, onCreated }: Props) {
               maxLength={60}
             />
           </label>
+
+          <div className="format-selector-group">
+            <label className="compose-label slim">
+              Output format
+            </label>
+            <div className="format-selector">
+              {(['audio', 'video', 'both'] as const).map((fmt) => (
+                <button
+                  key={fmt}
+                  type="button"
+                  className={`chip${outputFormat === fmt ? ' active' : ''}`}
+                  onClick={() => setOutputFormat(fmt)}
+                  disabled={pending}
+                >
+                  {fmt === 'audio' ? 'Audio only' : fmt === 'video' ? 'Video' : 'Both'}
+                </button>
+              ))}
+            </div>
+            {outputFormat !== 'audio' && (
+              <p className="format-hint">Video adds scene artwork — uses more credits.</p>
+            )}
+          </div>
 
           {error && <p className="form-error">{error}</p>}
 

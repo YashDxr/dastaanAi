@@ -16,6 +16,13 @@ costs a re-probe of an object that is already paid for rather than a re-purchase
 
 Nothing here is allowed to break a call. Redis being down means a cache miss, so
 the pipeline degrades to its uncached cost rather than failing.
+
+The cache lives in its own Redis logical database, away from the Celery broker.
+Sharing db 0 worked, but Celery keeps a result key per task and those outnumber
+cache entries several times over, so the cache was effectively invisible in the
+Redis UI. Entries also carry human-readable provenance - which story, stage and
+model produced them, and a short preview - because a SHA-256 key on its own
+tells an operator nothing about what is cached.
 """
 
 import hashlib
@@ -38,14 +45,27 @@ _PREFIX = "daastaan:cache"
 TTS_OBJECT_PREFIX = "cache/tts"
 IMAGE_OBJECT_PREFIX = "cache/image"
 
+# How much of a prompt or line is kept alongside an entry. Enough to recognise,
+# short enough that the cache does not become a second copy of the story.
+PREVIEW_CHARS = 120
+
 _redis: redis.Redis | None = None
 
 
 def _client() -> redis.Redis:
     global _redis
     if _redis is None:
-        _redis = redis.from_url(get_settings().redis_url, decode_responses=True)
+        _redis = redis.from_url(get_settings().cache_redis_url(), decode_responses=True)
     return _redis
+
+
+def _index_key(story_id: str) -> str:
+    return f"{_PREFIX}:index:{story_id}"
+
+
+def preview(text: str) -> str:
+    flat = " ".join(text.split())
+    return flat[:PREVIEW_CHARS] + ("…" if len(flat) > PREVIEW_CHARS else "")
 
 
 def digest(*parts: Any) -> str:
@@ -91,17 +111,53 @@ def _get_json(namespace: str, key: str) -> dict[str, Any] | None:
     return value if isinstance(value, dict) else None
 
 
-def _put_json(namespace: str, key: str, value: dict[str, Any]) -> None:
+def _put_json(
+    namespace: str, key: str, value: dict[str, Any], *, source: "Source | None" = None
+) -> None:
     if not enabled():
         return
+
+    ttl = get_settings().cache_ttl_seconds
+    full_key = f"{_PREFIX}:{namespace}:{key}"
+    body = {**value, **(source.as_meta() if source else {})}
+
     try:
-        _client().set(
-            f"{_PREFIX}:{namespace}:{key}",
-            json.dumps(value),
-            ex=get_settings().cache_ttl_seconds,
-        )
+        client = _client()
+        pipe = client.pipeline()
+        pipe.set(full_key, json.dumps(body), ex=ttl)
+        if source and source.story_id:
+            # Lets an operator ask "what did this story cache?", which the
+            # content-addressed keys alone cannot answer. Refreshed on every
+            # write so the index expires no sooner than its members.
+            pipe.sadd(_index_key(source.story_id), full_key)
+            pipe.expire(_index_key(source.story_id), ttl)
+        pipe.execute()
     except Exception:
         log.warning("cache_write_failed", namespace=namespace, exc_info=True)
+
+
+@dataclass(frozen=True)
+class Source:
+    """Where a cached entry came from.
+
+    Purely for humans reading the Redis UI or the logs: none of it takes part in
+    the key, which would defeat the point of a global content-addressed cache.
+    """
+
+    stage: str
+    model: str
+    story_id: str | None = None
+    version_id: str | None = None
+    text: str = ""
+
+    def as_meta(self) -> dict[str, Any]:
+        return {
+            "_stage": self.stage,
+            "_model": self.model,
+            "_story_id": self.story_id,
+            "_version_id": self.version_id,
+            "_preview": preview(self.text),
+        }
 
 
 # --- structured completions -------------------------------------------------
@@ -109,13 +165,16 @@ def _put_json(namespace: str, key: str, value: dict[str, Any]) -> None:
 
 def get_llm(key: str) -> dict[str, Any] | None:
     hit = _get_json("llm", key)
-    if hit is not None:
-        log.info("cache_hit", namespace="llm", key=key[:12])
-    return hit
+    if hit is None:
+        return None
+    log.info("cache_hit", namespace="llm", key=key[:12])
+    # Provenance is bookkeeping, not part of the model's output, so it is
+    # stripped before the payload is parsed back into a schema.
+    return {k: v for k, v in hit.items() if not k.startswith("_")}
 
 
-def put_llm(key: str, payload: dict[str, Any]) -> None:
-    _put_json("llm", key, payload)
+def put_llm(key: str, payload: dict[str, Any], *, source: Source | None = None) -> None:
+    _put_json("llm", key, payload, source=source)
 
 
 # --- binary results ---------------------------------------------------------
@@ -153,6 +212,7 @@ def _put_blob(
     data: bytes,
     content_type: str,
     meta: dict[str, Any],
+    source: Source | None = None,
 ) -> str | None:
     if not enabled():
         return None
@@ -165,7 +225,12 @@ def _put_blob(
         log.warning("cache_store_write_failed", namespace=namespace, exc_info=True)
         return None
 
-    _put_json(namespace, key, {**meta, "object_key": object_key})
+    _put_json(
+        namespace,
+        key,
+        {**meta, "object_key": object_key, "_bytes": len(data)},
+        source=source,
+    )
     return object_key
 
 
@@ -173,7 +238,7 @@ def get_tts(key: str) -> BlobHit | None:
     return _get_blob("tts", key)
 
 
-def put_tts(key: str, *, data: bytes, duration_ms: int) -> None:
+def put_tts(key: str, *, data: bytes, duration_ms: int, source: Source | None = None) -> None:
     _put_blob(
         "tts",
         key,
@@ -182,6 +247,7 @@ def put_tts(key: str, *, data: bytes, duration_ms: int) -> None:
         data=data,
         content_type="audio/mpeg",
         meta={"duration_ms": duration_ms},
+        source=source,
     )
 
 
@@ -189,7 +255,7 @@ def get_image(key: str) -> BlobHit | None:
     return _get_blob("image", key)
 
 
-def put_image(key: str, *, data: bytes) -> None:
+def put_image(key: str, *, data: bytes, source: Source | None = None) -> None:
     _put_blob(
         "image",
         key,
@@ -198,6 +264,7 @@ def put_image(key: str, *, data: bytes) -> None:
         data=data,
         content_type="image/png",
         meta={},
+        source=source,
     )
 
 

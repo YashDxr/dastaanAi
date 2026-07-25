@@ -31,26 +31,22 @@ from daastaan_contracts import (
     StageName,
     StoryState,
     StoryUnderstandingOutput,
+    VoiceAge,
     VoiceAssignment,
+    VoiceGender,
     limits,
 )
 from sqlmodel import Session
 
-from . import prompts
+from . import casting, prompts
 from .gateway import ModelGateway
 
 log = structlog.get_logger(__name__)
 
+# Admin setting holding role -> voice-id pins. Kept for compatibility with the
+# old role-preset dictionary, but it now reserves a voice for one character in
+# that role rather than assigning it to all of them. See `casting.assign_voices`.
 VOICE_PRESETS_KEY = "voice_presets"
-
-# OpenAI TTS voices, mapped by narrative role. Overridable from the admin panel.
-DEFAULT_VOICE_PRESETS: dict[str, str] = {
-    CharacterRole.NARRATOR.value: "sage",
-    CharacterRole.PROTAGONIST.value: "nova",
-    CharacterRole.ANTAGONIST.value: "onyx",
-    CharacterRole.SUPPORTING.value: "coral",
-}
-SUPPORTING_ROTATION = ("coral", "ballad", "verse", "echo", "fable")
 
 
 def _mood_summary(state: StoryState) -> str:
@@ -140,6 +136,8 @@ def character_registry(session: Session, state: StoryState, gw: ModelGateway) ->
             role=character.role,
             personality=character.personality,
             sample_line=character.sample_line,
+            gender=character.gender,
+            age=character.age,
         )
         for index, character in enumerate(result.characters[: limits.MAX_CHARACTERS])
     ]
@@ -153,6 +151,8 @@ def character_registry(session: Session, state: StoryState, gw: ModelGateway) ->
                 role=CharacterRole.NARRATOR,
                 personality="Measured, observant storyteller.",
                 sample_line="And so it began.",
+                gender=VoiceGender.NEUTRAL,
+                age=VoiceAge.ADULT,
             ),
         )
 
@@ -288,36 +288,40 @@ def narrator_persona(session: Session, state: StoryState, gw: ModelGateway) -> S
 
 
 def voice_assignment(session: Session, state: StoryState, gw: ModelGateway) -> StoryState:
-    """Deterministic, no model call. Role-to-voice mapping is configuration, and
-    paying a model to do a dictionary lookup would be silly."""
+    """Deterministic, no model call.
+
+    The casting inputs - vocal gender and age - were already decided by the
+    registry stage, so this is scoring and allocation. Paying a model to do it
+    would also make the result non-deterministic, and a cast that quietly
+    reshuffles between regenerations is worse than one chosen by rule.
+    """
     setting = session.get(AdminSetting, VOICE_PRESETS_KEY)
-    presets = {**DEFAULT_VOICE_PRESETS, **(setting.value_json if setting else {})}
+    pins = {k: v for k, v in (setting.value_json if setting else {}).items() if isinstance(v, str)}
 
     persona_note = (
-        state.narrator_persona.delivery_template if state.narrator_persona else "Natural delivery."
+        state.narrator_persona.delivery_template if state.narrator_persona else None
     )
 
-    assignments: list[VoiceAssignment] = []
-    supporting_index = 0
-    for character in state.characters:
-        if character.role is CharacterRole.SUPPORTING:
-            voice = SUPPORTING_ROTATION[supporting_index % len(SUPPORTING_ROTATION)]
-            supporting_index += 1
-        else:
-            voice = presets.get(character.role.value, "alloy")
+    cast = casting.assign_voices(state.characters, pins=pins)
 
-        base = (
-            persona_note
-            if character.role is CharacterRole.NARRATOR
-            else f"Voice of {character.name}. {character.personality}"
-        )
-        character.voice_preset = voice
+    assignments: list[VoiceAssignment] = []
+    for character in state.characters:
+        voice = cast[character.id]
+        base = casting.describe(character, voice, persona_note)
+        character.voice_preset = voice.id
         character.base_instructions = base
         assignments.append(
-            VoiceAssignment(character_id=character.id, voice_preset=voice, base_instructions=base)
+            VoiceAssignment(
+                character_id=character.id, voice_preset=voice.id, base_instructions=base
+            )
         )
 
     state.voice_map = assignments
+    log.info(
+        "voices_cast",
+        story_id=state.story_id,
+        cast={c.name: c.voice_preset for c in state.characters},
+    )
     return state
 
 

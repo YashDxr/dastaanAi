@@ -8,7 +8,7 @@ subset of keywords. Range checks belong in validators, which run after parsing.
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from .enums import AssetKind, CharacterRole, LineType
+from .enums import AssetKind, CharacterRole, LineType, VoiceAge, VoiceGender
 
 # Identifiers are minted by our code, never by a model. Stages that need to refer
 # back to an entity echo one of these strings, and we reject anything unrecognised.
@@ -19,6 +19,21 @@ LineId = str
 
 class Strict(BaseModel):
     model_config = ConfigDict(extra="forbid")
+
+
+# --- Document ingest -------------------------------------------------------
+
+
+class StoryCleanupOutput(Strict):
+    """Result of turning an uploaded document into something the pipeline can
+    read. Runs before stage 1, on text that came out of a parser or an OCR
+    engine, so the model is doing two jobs: discarding non-story matter and
+    repairing whatever the extraction mangled."""
+
+    cleaned_text: str
+    title_hint: str
+    genre_hint: str
+    notes: str
 
 
 # --- Stage 1: mood / genre -------------------------------------------------
@@ -65,6 +80,11 @@ class CharacterOutput(Strict):
     role: CharacterRole
     personality: str
     sample_line: str
+    # Casting inputs. Without these the voice allocator has nothing to match on
+    # but narrative role, which is how six characters ended up sharing a couple
+    # of timbres and differing only in delivery.
+    gender: VoiceGender
+    age: VoiceAge
 
 
 class CharacterRegistryOutput(Strict):
@@ -77,6 +97,10 @@ class Character(Strict):
     role: CharacterRole
     personality: str
     sample_line: str
+    # Defaulted because stories generated before casting existed are replayed
+    # through `StoryState.model_validate` on every regeneration.
+    gender: VoiceGender = VoiceGender.NEUTRAL
+    age: VoiceAge = VoiceAge.ADULT
     voice_preset: str | None = None
     base_instructions: str | None = None
 

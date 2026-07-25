@@ -8,6 +8,8 @@ venv/
 .pytest_cache/
 
 .env
+.env.music
+.music-service/
 .env.local
 *.local
 
@@ -24,3 +26,6 @@ media/
 .DS_Store
 .idea/
 .vscode/
+
+Nell_and_the_Cloud_Sheep.pdf
+

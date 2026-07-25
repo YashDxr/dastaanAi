@@ -3,7 +3,7 @@
 Orchestration shape:
 
     run_pipeline (single task, LangGraph in-process)
-        -> fan_out -> chord(group(tts, images), assemble)
+        -> fan_out -> chord(group(tts, images, optional music), assemble)
 
 The agent stages are executed sequentially (with stages 5+6 parallel) inside a
 single Celery task via LangGraph. This eliminates seven sequential broker
@@ -13,16 +13,25 @@ pipeline partway through.
 """
 
 import time
-from typing import Any
+from datetime import UTC, datetime
+from typing import TYPE_CHECKING, Any
 
 import redis as redis_lib
 import structlog
 from celery import chain, chord, group
-from daastaan_common import carry_over_assets, celery_app, get_settings, get_store, ids, session_scope
-from daastaan_common.models import Feedback, MediaAsset, Story, StoryVersion
+from daastaan_common import (
+    carry_over_assets,
+    celery_app,
+    get_settings,
+    get_store,
+    ids,
+    session_scope,
+)
+from daastaan_common.models import Feedback, IngestJob, MediaAsset, Story, StoryVersion
 from daastaan_contracts import (
     AssetKind,
     FeedbackStatus,
+    IngestStatus,
     JobStatus,
     Queue,
     Scope,
@@ -37,9 +46,29 @@ from daastaan_contracts import (
 from sqlmodel import select
 
 from . import prompts, repo
-from .assembly import AssemblyError, Clip, SceneFrame, build_scene_timeline, compose_episode, compose_video
+from .assembly import (
+    AUDIO_EXPORTS,
+    BGM_AUDIO_EXPORTS,
+    AssemblyError,
+    Clip,
+    SceneFrame,
+    bgm_content_type,
+    compose_episode,
+    compose_video,
+    export_content_type,
+    transcode,
+    transcode_bgm,
+)
+
+# Safe to import eagerly: the module keeps pypdf, tesseract and PIL behind
+# function-local imports so the API and the non-ingest workers never load them.
+from .ingest import ExtractionError
+
+if TYPE_CHECKING:
+    from .ingest import Extraction as IngestExtraction
 from .gateway import PERMANENT_FAILURES, ModelGateway, ModerationBlocked
 from .graph import run_agent_stages
+from .music import MusicServiceClient, MusicServiceError, build_music_brief
 from .nodes import STAGE_NODES
 from .tracing import (
     clear_pipeline_context,
@@ -69,6 +98,27 @@ RETRY_KWARGS = {
         *PERMANENT_FAILURES,
     ),
 }
+
+
+# Ingest gets its own policy. A file that cannot be parsed will not parse on the
+# fourth attempt either, so `ExtractionError` is terminal; only transport and
+# model outages are worth another go, and OCR is expensive enough that one retry
+# is the right ceiling.
+INGEST_RETRY_KWARGS: dict[str, Any] = {
+    **RETRY_KWARGS,
+    "max_retries": 1,
+    "dont_autoretry_for": (*RETRY_KWARGS["dont_autoretry_for"], ExtractionError),
+}
+
+# How much of a document is screened by moderation, and how much reaches the
+# cleanup model. Both are prefixes: the point is to catch what a story is, not
+# to pay to reason over a whole book.
+MODERATION_SAMPLE_CHARS = 20_000
+MAX_CLEANUP_INPUT_CHARS = 120_000
+
+
+def _utcnow() -> datetime:
+    return datetime.now(UTC)
 
 
 def _bypass_cache(state: StoryState) -> bool:
@@ -157,6 +207,7 @@ def run_stage(self, version_id: str, stage_value: str, user_id: str) -> str:  # 
                 stage=stage.value,
                 version_id=version_id,
                 user_id=user_id,
+                story_id=state.story_id,
                 bypass_cache=_bypass_cache(state),
             )
             state = node(session, state, gateway)
@@ -232,6 +283,7 @@ def tts_line(self, version_id: str, line_id: str, user_id: str) -> str | None:  
                 stage=StageName.TTS_SYNTHESIS.value,
                 version_id=version_id,
                 user_id=user_id,
+                story_id=state.story_id,
                 bypass_cache=_bypass_cache(state),
             )
             with _TTSSemaphore(state.story_id):
@@ -262,9 +314,12 @@ def tts_line(self, version_id: str, line_id: str, user_id: str) -> str | None:  
 
 
 @celery_app.task(name=TaskName.GEN_IMAGE.value, bind=True, **RETRY_KWARGS)
-def gen_image(self, version_id: str, scene_id: str, user_id: str) -> str | None:  # type: ignore[no-untyped-def]
+def gen_image(self, version_id: str, scene_id: str, user_id: str, shot_type: str | None = None, line_id: str | None = None) -> str | None:  # type: ignore[no-untyped-def]
     init_tracing()
-    dedupe = ids.dedupe_key(AssetKind.SCENE_IMAGE, scene_id=scene_id)
+    if line_id:
+        dedupe = ids.dedupe_key(AssetKind.SCENE_IMAGE, line_id=line_id)
+    else:
+        dedupe = ids.dedupe_key(AssetKind.SCENE_IMAGE, scene_id=scene_id, tag=shot_type)
 
     with session_scope() as session:
         if repo.find_asset(session, version_id=version_id, dedupe_key=dedupe):
@@ -274,7 +329,7 @@ def gen_image(self, version_id: str, scene_id: str, user_id: str) -> str | None:
             session, version_id=version_id, kind=AssetKind.SCENE_IMAGE, dedupe_key=dedupe
         )
         if claim is None:
-            log.info("image_claimed_by_another", scene_id=scene_id)
+            log.info("image_claimed_by_another", scene_id=scene_id, shot_type=shot_type, line_id=line_id)
             return scene_id
 
         state = repo.load_state(session, version_id)
@@ -284,16 +339,27 @@ def gen_image(self, version_id: str, scene_id: str, user_id: str) -> str | None:
             raise LookupError(f"scene {scene_id} not present in version {version_id}")
 
         mood = state.mood.mood if state.mood else "neutral"
-        prompt = (
-            f"{prompts.SCENE_IMAGE}\n\nScene: {scene.title}. {scene.summary}\n"
-            f"Setting: {scene.setting}. Mood: {mood}."
-        )
+
+        if line_id:
+            line = state.line_by_id(line_id)
+            if line is None:
+                repo.release_claim(session, claim)
+                raise LookupError(f"line {line_id} not present in version {version_id}")
+            prompt = prompts.line_image_prompt(shot_type or "mid", scene, line, mood)
+        else:
+            image_prompt = prompts.SHOT_PROMPTS[shot_type] if shot_type else prompts.SCENE_IMAGE
+            prompt = (
+                f"{image_prompt}\n\nScene: {scene.title}. {scene.summary}\n"
+                f"Setting: {scene.setting}. Mood: {mood}."
+            )
+
         try:
             gateway = ModelGateway(
                 session,
                 stage=StageName.IMAGE_GENERATION.value,
                 version_id=version_id,
                 user_id=user_id,
+                story_id=state.story_id,
                 bypass_cache=_bypass_cache(state),
             )
             image = gateway.image(prompt=prompt)
@@ -301,7 +367,10 @@ def gen_image(self, version_id: str, scene_id: str, user_id: str) -> str | None:
             repo.release_claim(session, claim)
             raise
 
-        key = ids.object_key(version_id, AssetKind.SCENE_IMAGE, scene_id=scene_id, ext="png")
+        if line_id:
+            key = ids.object_key(version_id, AssetKind.SCENE_IMAGE, line_id=line_id, ext="png")
+        else:
+            key = ids.object_key(version_id, AssetKind.SCENE_IMAGE, scene_id=scene_id, tag=shot_type, ext="png")
         get_store().put(key, image, "image/png")
         repo.record_asset(
             session,
@@ -311,10 +380,130 @@ def gen_image(self, version_id: str, scene_id: str, user_id: str) -> str | None:
             object_key=key,
             content_type="image/png",
             scene_id=scene_id,
+            line_id=line_id,
             size_bytes=len(image),
         )
         repo.publish(state.story_id, {"type": "asset", "kind": "scene_image", "scene_id": scene_id})
     return scene_id
+
+
+@celery_app.task(name=TaskName.GEN_MUSIC.value, bind=True)
+def gen_music(self, version_id: str, user_id: str) -> str | None:  # type: ignore[no-untyped-def]
+    """Generate one loopable instrumental bed through the private Mac sidecar.
+
+    This task intentionally does not use the generic autoretry decorator.  A
+    music host being asleep must degrade one story to narration-only output, not
+    fail the Celery chord or stall the rest of the media pipeline. The sidecar
+    persists an idempotent job, so an empty asset placeholder left by a worker
+    crash is deliberately reused on redelivery rather than treated as complete.
+    """
+    del user_id  # The local service has no user concept; it receives only a safe brief.
+    init_tracing()
+    dedupe = ids.dedupe_key(AssetKind.MUSIC_BED)
+    settings = get_settings()
+
+    with session_scope() as session:
+        state = repo.load_state(session, version_id)
+        job = repo.start_job(
+            session,
+            story_id=state.story_id,
+            version_id=version_id,
+            stage=StageName.MUSIC_GENERATION,
+        )
+        if not settings.music_enabled:
+            repo.finish_job(session, job, status=JobStatus.SKIPPED)
+            return None
+
+        existing = repo.find_asset(session, version_id=version_id, dedupe_key=dedupe)
+        if existing and existing.object_key:
+            repo.finish_job(session, job, status=JobStatus.SKIPPED)
+            return None
+
+        # `claim_asset()` commits an empty object_key before paid work starts.
+        # Keep that durable slot through worker loss: submitting the same
+        # idempotency key retrieves the sidecar job rather than launching a
+        # second MLX process. A concurrent claimant safely converges on it too.
+        claim = existing
+        if claim is None:
+            claim = repo.claim_asset(
+                session,
+                version_id=version_id,
+                kind=AssetKind.MUSIC_BED,
+                dedupe_key=dedupe,
+            )
+        if claim is None:
+            claim = repo.find_asset(session, version_id=version_id, dedupe_key=dedupe)
+        if claim is None:
+            repo.finish_job(session, job, status=JobStatus.SKIPPED)
+            return None
+
+        try:
+            brief = build_music_brief(state, settings)
+            idempotency_key = f"{version_id}:{dedupe}"
+            with MusicServiceClient(settings) as client:
+                generated = client.generate(idempotency_key=idempotency_key, brief=brief)
+                key = ids.object_key(version_id, AssetKind.MUSIC_BED, ext="wav")
+                get_store().put(key, generated.audio, "audio/wav")
+                # `record_asset` commits before the sidecar output is removed.
+                # If this worker dies before then, redelivery can download the
+                # same durable job and complete this storage transaction.
+                repo.record_asset(
+                    session,
+                    version_id=version_id,
+                    kind=AssetKind.MUSIC_BED,
+                    dedupe_key=dedupe,
+                    object_key=key,
+                    content_type="audio/wav",
+                    duration_ms=generated.duration_ms,
+                    instructions_used=brief.prompt[:500],
+                    size_bytes=len(generated.audio),
+                )
+                try:
+                    client.delete_job(generated.job_id)
+                except MusicServiceError:
+                    # A TTL sweeper on the Mac will reclaim this output. The
+                    # shared copy is already committed, so cleanup is optional.
+                    log.warning("music_sidecar_cleanup_failed", job_id=generated.job_id)
+            repo.finish_job(session, job, status=JobStatus.SUCCEEDED)
+            repo.publish(
+                state.story_id,
+                {
+                    "type": "asset",
+                    "kind": AssetKind.MUSIC_BED.value,
+                    "duration_ms": generated.duration_ms,
+                },
+            )
+            log.info(
+                "music_generated",
+                version_id=version_id,
+                job_id=generated.job_id,
+                duration_ms=generated.duration_ms,
+                seed=generated.seed,
+            )
+            return generated.job_id
+        except MusicServiceError as exc:
+            # The score is optional. Preserve the empty slot and the sidecar's
+            # idempotent job for a redelivery/retry, but make the user-visible
+            # stage neutral rather than falsely failing a playable episode.
+            public_error = "Background score unavailable; narration will continue."
+            repo.finish_job(session, job, status=JobStatus.SKIPPED, error=public_error)
+            repo.publish(
+                state.story_id,
+                {
+                    "type": "music_status",
+                    "status": "unavailable",
+                    "error": public_error,
+                },
+            )
+            log.warning("music_generation_degraded", version_id=version_id, error=str(exc))
+            return None
+        except Exception as exc:
+            # Storage, database, and programming failures are not optional.
+            # Let Celery report the real failure instead of silently delivering
+            # an episode whose durable media state is inconsistent.
+            repo.finish_job(session, job, status=JobStatus.FAILED, error=str(exc))
+            log.exception("music_generation_failed", version_id=version_id)
+            raise
 
 
 @celery_app.task(name=TaskName.ASSEMBLE.value, bind=True, **RETRY_KWARGS)
@@ -356,7 +545,29 @@ def assemble(self, version_id: str, user_id: str) -> str:  # type: ignore[no-unt
             if missing:
                 log.warning("assembling_with_missing_clips", version_id=version_id, missing=missing)
 
-            episode = compose_episode(clips)
+            music_asset = session.exec(
+                select(MediaAsset).where(
+                    MediaAsset.version_id == version_id,
+                    MediaAsset.kind == AssetKind.MUSIC_BED.value,
+                    MediaAsset.object_key != "",
+                )
+            ).first()
+            music_bed = None
+            if music_asset is not None:
+                try:
+                    music_bed = store.get(music_asset.object_key)
+                except Exception:
+                    # A missing optional cue must never destroy a successfully
+                    # synthesised narration. The media worker will report the
+                    # BGM failure separately and the episode remains playable.
+                    log.warning(
+                        "music_asset_missing_during_assembly",
+                        version_id=version_id,
+                        asset_id=music_asset.id,
+                        exc_info=True,
+                    )
+
+            episode = compose_episode(clips, music_bed=music_bed)
             key = ids.object_key(version_id, AssetKind.FINAL_EPISODE, ext="mp3")
             store.put(key, episode, "audio/mpeg")
 
@@ -415,16 +626,21 @@ def compose_video_task(self, version_id: str, user_id: str) -> str:  # type: ign
                 ).all()
             }
 
-            # Load scene image assets
-            image_assets = {
-                asset.scene_id: asset
-                for asset in session.exec(
-                    select(MediaAsset).where(
-                        MediaAsset.version_id == version_id,
-                        MediaAsset.kind == AssetKind.SCENE_IMAGE.value,
-                    )
-                ).all()
-            }
+            # Load scene image assets keyed by line_id (per-line images)
+            # and also by scene_id (fallback for audio-only thumbnails)
+            image_by_line: dict[str, MediaAsset] = {}
+            image_by_scene: dict[str, MediaAsset] = {}
+            for asset in session.exec(
+                select(MediaAsset).where(
+                    MediaAsset.version_id == version_id,
+                    MediaAsset.kind == AssetKind.SCENE_IMAGE.value,
+                )
+            ).all():
+                if asset.object_key:
+                    if asset.line_id:
+                        image_by_line[asset.line_id] = asset
+                    elif asset.scene_id:
+                        image_by_scene[asset.scene_id] = asset
 
             # Load the final episode audio
             if not state.final_episode_key:
@@ -432,27 +648,30 @@ def compose_video_task(self, version_id: str, user_id: str) -> str:  # type: ign
             store = get_store()
             episode_audio = store.get(state.final_episode_key)
 
-            # Build scene timeline
-            timeline = build_scene_timeline(state.lines, audio_assets)
-
-            # Build SceneFrame list, skipping scenes without images
+            # Build per-line frames: each line gets its own image with duration = audio + pause
             scene_frames: list[SceneFrame] = []
-            for scene in sorted(state.scenes, key=lambda s: s.index):
-                if scene.id not in image_assets or not image_assets[scene.id].object_key:
-                    log.warning("video_missing_scene_image", scene_id=scene.id)
+            for line in sorted(state.lines, key=lambda l: l.index):
+                img_asset = image_by_line.get(line.id)
+                if img_asset is None:
+                    # Fallback: try scene-level image
+                    img_asset = image_by_scene.get(line.scene_id)
+                if img_asset is None:
+                    log.warning("video_missing_line_image", line_id=line.id, scene_id=line.scene_id)
                     continue
-                if scene.id not in timeline:
-                    log.warning("video_missing_scene_timeline", scene_id=scene.id)
-                    continue
-                start_ms, end_ms = timeline[scene.id]
-                duration_ms = end_ms - start_ms
+
+                audio_asset = audio_assets.get(line.id)
+                audio_dur = audio_asset.duration_ms if audio_asset and audio_asset.duration_ms else 0
+                duration_ms = audio_dur + (line.pause_after_ms or 0)
                 if duration_ms <= 0:
                     continue
-                image_bytes = store.get(image_assets[scene.id].object_key)
+
+                image_bytes = store.get(img_asset.object_key)
                 scene_frames.append(SceneFrame(
                     image=image_bytes,
                     duration_ms=duration_ms,
-                    scene_id=scene.id,
+                    scene_id=line.scene_id,
+                    text=line.text,
+                    speaker=line.speaker or "",
                 ))
 
             if not scene_frames:
@@ -488,7 +707,13 @@ def compose_video_task(self, version_id: str, user_id: str) -> str:  # type: ign
 
 
 @celery_app.task(name="daastaan.pipeline.fan_out", bind=True)
-def fan_out(self, version_id: str, user_id: str, include_images: bool = True) -> str:  # type: ignore[no-untyped-def]
+def fan_out(
+    self,
+    version_id: str,
+    user_id: str,
+    include_images: bool = True,
+    include_music: bool | None = None,
+) -> str:  # type: ignore[no-untyped-def]
     """Expands the per-line and per-scene work into one chord.
 
     A chord rather than two groups so assembly runs exactly once, after both
@@ -498,14 +723,23 @@ def fan_out(self, version_id: str, user_id: str, include_images: bool = True) ->
     empty; on a regeneration it holds everything the fork carried over from the
     parent, so a one-line respeak enqueues one TTS task instead of one per line.
     """
+    settings = get_settings()
+    music_stage_requested = include_music is None or include_music
+    if include_music is None:
+        include_music = settings.music_enabled
+
     with session_scope() as session:
         state = repo.load_state(session, version_id)
-        existing = {
-            asset.dedupe_key
-            for asset in session.exec(
+        existing_assets = list(
+            session.exec(
                 select(MediaAsset).where(MediaAsset.version_id == version_id)
             ).all()
-        }
+        )
+        existing = {asset.dedupe_key for asset in existing_assets}
+        music_complete = any(
+            asset.dedupe_key == ids.dedupe_key(AssetKind.MUSIC_BED) and asset.object_key
+            for asset in existing_assets
+        )
         # Opened here, closed by `assemble`: neither stage has a task of its own
         # to report against, and without these rows the stepper can never pass 80%.
         repo.start_job(
@@ -521,6 +755,19 @@ def fan_out(self, version_id: str, user_id: str, include_images: bool = True) ->
                 version_id=version_id,
                 stage=StageName.IMAGE_GENERATION,
             )
+        if music_stage_requested and not settings.music_enabled:
+            music_job = repo.start_job(
+                session,
+                story_id=state.story_id,
+                version_id=version_id,
+                stage=StageName.MUSIC_GENERATION,
+            )
+            repo.finish_job(
+                session,
+                music_job,
+                status=JobStatus.SKIPPED,
+                error="Background score is disabled.",
+            )
 
     if state.output_format in ("video", "both"):
         include_images = True
@@ -531,11 +778,33 @@ def fan_out(self, version_id: str, user_id: str, include_images: bool = True) ->
         if ids.dedupe_key(AssetKind.LINE_AUDIO, line_id=line.id) not in existing
     ]
     if include_images:
-        jobs += [
-            gen_image.si(version_id, scene.id, user_id)
-            for scene in state.scenes[: limits.MAX_IMAGES_PER_STORY]
-            if ids.dedupe_key(AssetKind.SCENE_IMAGE, scene_id=scene.id) not in existing
-        ]
+        if state.output_format in ("video", "both"):
+            # One image per dialogue line, cycling shot framings for variety
+            image_count = 0
+            for scene in state.scenes:
+                scene_lines = [l for l in state.lines if l.scene_id == scene.id]
+                for i, line in enumerate(sorted(scene_lines, key=lambda l: l.index)):
+                    if image_count >= limits.MAX_IMAGES_PER_STORY:
+                        break
+                    shot = limits.SHOT_TAGS[i % len(limits.SHOT_TAGS)]
+                    dk = ids.dedupe_key(AssetKind.SCENE_IMAGE, line_id=line.id)
+                    if dk not in existing:
+                        jobs.append(gen_image.si(version_id, scene.id, user_id, shot, line.id))
+                    image_count += 1
+                if image_count >= limits.MAX_IMAGES_PER_STORY:
+                    break
+        else:
+            jobs += [
+                gen_image.si(version_id, scene.id, user_id)
+                for scene in state.scenes[: limits.MAX_IMAGES_PER_STORY]
+                if ids.dedupe_key(AssetKind.SCENE_IMAGE, scene_id=scene.id) not in existing
+            ]
+    # A committed empty slot is a recoverable interrupted generation, not an
+    # asset. Re-submit it under the same sidecar idempotency key so it resumes
+    # safely instead of producing a permanent narration-only version.
+    music_missing = not music_complete
+    if include_music and settings.music_enabled and music_missing:
+        jobs.append(gen_music.si(version_id, user_id))
 
     if not jobs:
         assemble.si(version_id, user_id).apply_async(queue=Queue.ASSEMBLY.value)
@@ -681,9 +950,18 @@ def regenerate(  # type: ignore[no-untyped-def]
         for stage in planned
         if stage in STAGE_NODES
     ]
-    if StageName.TTS_SYNTHESIS in planned or StageName.IMAGE_GENERATION in planned:
+    if (
+        StageName.TTS_SYNTHESIS in planned
+        or StageName.IMAGE_GENERATION in planned
+        or StageName.MUSIC_GENERATION in planned
+    ):
         steps.append(
-            fan_out.si(version_id, user_id, StageName.IMAGE_GENERATION in planned)
+            fan_out.si(
+                version_id,
+                user_id,
+                StageName.IMAGE_GENERATION in planned,
+                StageName.MUSIC_GENERATION in planned,
+            )
         )
     else:
         steps.append(assemble.si(version_id, user_id))
@@ -695,16 +973,17 @@ def regenerate(  # type: ignore[no-untyped-def]
     return version_id
 
 
-def _will_retry(task, exc: Exception) -> bool:  # type: ignore[no-untyped-def]
+def _will_retry(task, exc: Exception, policy: dict[str, Any] | None = None) -> bool:  # type: ignore[no-untyped-def]
     """Mirrors what Celery's autoretry machinery is about to decide.
 
     Needed because a failure must only be reported to the user once the task has
     genuinely given up. Recording it on the first of four attempts would flash a
     failure in the UI that a retry then silently contradicts.
     """
-    if isinstance(exc, RETRY_KWARGS["dont_autoretry_for"]):
+    policy = policy or RETRY_KWARGS
+    if isinstance(exc, policy["dont_autoretry_for"]):
         return False
-    return int(getattr(task.request, "retries", 0)) < int(RETRY_KWARGS["max_retries"])
+    return int(getattr(task.request, "retries", 0)) < int(policy["max_retries"])
 
 
 def _fail_feedback(story_id: str, feedback_id: str, exc: Exception) -> None:
@@ -774,7 +1053,11 @@ def _interpret_feedback(
 
         state = repo.load_state(session, version_id)
         gateway = ModelGateway(
-            session, stage="feedback_interpreter", version_id=version_id, user_id=user_id
+            session,
+            stage="feedback_interpreter",
+            version_id=version_id,
+            user_id=user_id,
+            story_id=story_id,
         )
         gateway.moderate(feedback.raw_text)
 
@@ -865,10 +1148,260 @@ def _interpret_feedback(
     return new_version_id
 
 
+# --- audio export ----------------------------------------------------------
+
+
+@celery_app.task(name=TaskName.EXPORT_AUDIO.value, bind=True, **RETRY_KWARGS)
+def export_audio(self, version_id: str, user_id: str, fmt: str) -> str:
+    """Transcode the finished episode into a downloadable format.
+
+    Runs on the assembly pool, which is where ffmpeg already lives and where
+    concurrency is 1 - the right place for a CPU-bound encode. Results are stored
+    as assets, so the second request for a format is a lookup rather than another
+    encode.
+    """
+    if fmt not in AUDIO_EXPORTS:
+        raise ValueError(f"unsupported export format: {fmt}")
+
+    dedupe = f"{AssetKind.EPISODE_EXPORT.value}:{fmt}"
+
+    with session_scope() as session:
+        if existing := repo.find_asset(session, version_id=version_id, dedupe_key=dedupe):
+            log.info("export_cached", version_id=version_id, fmt=fmt)
+            return existing.id
+
+        master = session.exec(
+            select(MediaAsset).where(
+                MediaAsset.version_id == version_id,
+                MediaAsset.kind == AssetKind.FINAL_EPISODE,
+            )
+        ).first()
+        if master is None:
+            raise LookupError(f"no final episode for version {version_id}")
+        master_key, duration_ms = master.object_key, master.duration_ms
+
+    store = get_store()
+    data = transcode(store.get(master_key), fmt)
+    key = ids.object_key(version_id, AssetKind.EPISODE_EXPORT, ext=fmt)
+    content_type = export_content_type(fmt)
+    store.put(key, data, content_type)
+
+    with session_scope() as session:
+        asset = repo.record_asset(
+            session,
+            version_id=version_id,
+            kind=AssetKind.EPISODE_EXPORT,
+            dedupe_key=dedupe,
+            object_key=key,
+            content_type=content_type,
+            size_bytes=len(data),
+            duration_ms=duration_ms,
+        )
+        session.commit()
+        asset_id = asset.id
+
+    log.info("export_ready", version_id=version_id, fmt=fmt, bytes=len(data))
+    return asset_id
+
+
+@celery_app.task(name=TaskName.EXPORT_BGM.value, bind=True, **RETRY_KWARGS)
+def export_bgm(self, version_id: str, user_id: str, fmt: str) -> str:  # type: ignore[no-untyped-def]
+    """Transcode the generated music bed into a downloadable format.
+
+    The BGM master is a lossless 44.1 kHz stereo WAV, so MP3/FLAC/M4A/Opus here
+    are first-generation encodes from a lossless source — genuinely better than
+    their episode-export equivalents. WAV is never transcoded; callers serve the
+    stored music_bed asset directly (same as the episode master for MP3).
+
+    Runs on the assembly queue alongside episode transcodes.
+    """
+    if fmt not in BGM_AUDIO_EXPORTS:
+        raise ValueError(f"unsupported BGM export format: {fmt}")
+
+    dedupe = f"{AssetKind.BGM_EXPORT.value}:{fmt}"
+
+    with session_scope() as session:
+        if existing := repo.find_asset(session, version_id=version_id, dedupe_key=dedupe):
+            log.info("bgm_export_cached", version_id=version_id, fmt=fmt)
+            return existing.id
+
+        master = session.exec(
+            select(MediaAsset).where(
+                MediaAsset.version_id == version_id,
+                MediaAsset.kind == AssetKind.MUSIC_BED,
+            )
+        ).first()
+        if master is None:
+            raise LookupError(f"no music bed for version {version_id}")
+        master_key, duration_ms = master.object_key, master.duration_ms
+
+    store = get_store()
+    data = transcode_bgm(store.get(master_key), fmt)
+    key = ids.object_key(version_id, AssetKind.BGM_EXPORT, ext=fmt)
+    content_type = bgm_content_type(fmt)
+    store.put(key, data, content_type)
+
+    with session_scope() as session:
+        asset = repo.record_asset(
+            session,
+            version_id=version_id,
+            kind=AssetKind.BGM_EXPORT,
+            dedupe_key=dedupe,
+            object_key=key,
+            content_type=content_type,
+            size_bytes=len(data),
+            duration_ms=duration_ms,
+        )
+        session.commit()
+        asset_id = asset.id
+
+    log.info("bgm_export_ready", version_id=version_id, fmt=fmt, bytes=len(data))
+    return asset_id
+
+
+# --- document ingest -------------------------------------------------------
+
+
+@celery_app.task(name=TaskName.INGEST_EXTRACT.value, bind=True, **INGEST_RETRY_KWARGS)
+def ingest_extract(self, ingest_id: str, user_id: str) -> str:
+    """Uploaded file -> reviewable story text.
+
+    Runs on the agents pool. OCR is CPU-bound and that pool has four slots, so a
+    handful of concurrent scans will saturate a small host; the page cap in
+    `ingest.MAX_OCR_PAGES` is what keeps any single job bounded.
+    """
+    from . import ingest as extractor
+
+    with session_scope() as session:
+        job = session.get(IngestJob, ingest_id)
+        if job is None:
+            raise LookupError(f"ingest {ingest_id} not found")
+        # Read what the rest of the task needs while the row is still attached.
+        object_key, content_type = job.object_key, job.content_type
+        job.status = IngestStatus.EXTRACTING
+        session.commit()
+
+    try:
+        extraction = extractor.extract(get_store().get(object_key), content_type)
+
+        with session_scope() as session:
+            job = session.get(IngestJob, ingest_id)
+            job.method = extraction.method.value
+            job.page_count = extraction.page_count
+            job.raw_chars = len(extraction.text)
+            job.status = IngestStatus.CLEANING
+            session.commit()
+
+        cleaned, hints = _clean_document(extraction, user_id=user_id)
+
+        with session_scope() as session:
+            job = session.get(IngestJob, ingest_id)
+            job.cleaned_text = cleaned
+            job.title_hint, job.genre_hint, job.notes = hints
+            job.status = IngestStatus.READY
+            job.finished_at = _utcnow()
+            session.commit()
+
+        log.info(
+            "ingest_ready",
+            ingest_id=ingest_id,
+            method=extraction.method.value,
+            raw_chars=len(extraction.text),
+            cleaned_chars=len(cleaned),
+        )
+        return ingest_id
+
+    except Exception as exc:
+        if _will_retry(self, exc, INGEST_RETRY_KWARGS):
+            raise
+        _fail_ingest(ingest_id, exc)
+        raise
+
+
+def _clean_document(
+    extraction: "IngestExtraction", *, user_id: str
+) -> tuple[str, tuple[str | None, str | None, str | None]]:
+    from daastaan_contracts import StoryCleanupOutput
+
+    with session_scope() as session:
+        gateway = ModelGateway(
+            session, stage="document_ingest", version_id=None, user_id=user_id
+        )
+        # Extracted text is exactly as untrusted as text a user types, and this
+        # is the first model to see it. Moderation reads a prefix: the endpoint
+        # has its own size limit and a whole book would cost more to screen than
+        # the screening is worth.
+        gateway.moderate(extraction.text[:MODERATION_SAMPLE_CHARS])
+        result = gateway.structured(
+            schema=StoryCleanupOutput,
+            system=prompts.story_cleanup_prompt(max_chars=limits.MAX_STORY_INPUT_CHARS),
+            user_content=(
+                f"Extraction method: {extraction.method.value}. "
+                f"Pages: {extraction.page_count}.\n\n"
+                f"<document>\n{extraction.text[:MAX_CLEANUP_INPUT_CHARS]}\n</document>"
+            ),
+            kind="reasoning",
+            temperature=0.2,
+        )
+        session.commit()
+
+    cleaned = result.cleaned_text.strip()[: limits.MAX_STORY_INPUT_CHARS]
+    if len(cleaned) < 20:
+        raise ExtractionError(
+            "No story could be found in that file. Check the upload, or paste the "
+            "text in directly."
+        )
+
+    # The model is asked to pass prose through, not summarise it. When it ignores
+    # that on a source that had room to spare, the story reaches the script stage
+    # as a synopsis with its dialogue already gone - and nothing downstream can
+    # tell that apart from a genuinely short story. Surface it here.
+    if (
+        len(extraction.text) > limits.MAX_STORY_INPUT_CHARS
+        and len(cleaned) < limits.MAX_STORY_INPUT_CHARS * 0.4
+    ):
+        log.warning(
+            "ingest.cleanup_suspiciously_short",
+            raw_chars=len(extraction.text),
+            cleaned_chars=len(cleaned),
+            budget=limits.MAX_STORY_INPUT_CHARS,
+            method=extraction.method.value,
+        )
+    return cleaned, (
+        result.title_hint.strip()[:120] or None,
+        result.genre_hint.strip()[:60] or None,
+        result.notes.strip()[:500] or None,
+    )
+
+
+def _fail_ingest(ingest_id: str, exc: Exception) -> None:
+    """Record the reason on the job so the compose form can show it.
+
+    Extraction messages are written to be read by the person who uploaded the
+    file. Anything else is replaced, because an OpenAI or database error should
+    not be rendered into a form field.
+    """
+    friendly = (
+        str(exc)
+        if isinstance(exc, ExtractionError | ModerationBlocked)
+        else "That file could not be processed. Try another file, or paste the text in directly."
+    )
+    try:
+        with session_scope() as session:
+            job = session.get(IngestJob, ingest_id)
+            if job:
+                job.status = IngestStatus.FAILED
+                job.error = friendly[:500]
+                job.finished_at = _utcnow()
+                session.commit()
+    except Exception:
+        log.exception("ingest_failure_not_recorded", ingest_id=ingest_id)
+
+
 def _resolve_target(state: StoryState, scope: Scope, target_id: str | None) -> str | None:
     """A target the model names must exist in the current state. Unknown ids are
     dropped rather than passed along."""
-    if scope is Scope.FULL_STORY or not target_id:
+    if scope in {Scope.FULL_STORY, Scope.MUSIC} or not target_id:
         return None
     lookup = {
         Scope.LINE: state.line_by_id,

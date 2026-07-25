@@ -14,6 +14,7 @@ const EXAMPLES = [
   'Make the narrator quieter and slower',
   'Give the woman more urgency in the final scene',
   'The opening feels too cheerful for this story',
+  'Make the background score darker and more suspenseful',
 ]
 
 /** What each entry point actually rewrites, in the user's language. */
@@ -22,6 +23,7 @@ const STAGE_VERB: Record<string, string> = {
   emotion_tagging: 'Re-reading the emotion of',
   voice_assignment: 'Re-casting the voice of',
   image_generation: 'Re-illustrating',
+  music_generation: 'Re-scoring',
   story_understanding: 'Rewriting',
   mood_classification: 'Re-reading the mood of',
 }
@@ -32,6 +34,7 @@ function truncate(text: string, max = 60) {
 
 function targetPhrase(directive: RegenDirective, state?: StoryState | null): string {
   const { scope, target_id } = directive
+  if (scope === 'music') return 'the background score'
   if (scope === 'full_story' || !target_id) return 'the whole episode'
 
   if (scope === 'line') {

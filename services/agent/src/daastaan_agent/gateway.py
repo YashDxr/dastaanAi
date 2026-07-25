@@ -88,12 +88,17 @@ class ModelGateway:
         stage: str,
         version_id: str | None = None,
         user_id: str | None = None,
+        story_id: str | None = None,
         bypass_cache: bool = False,
     ) -> None:
         self.session = session
         self.stage = stage
         self.version_id = version_id
         self.user_id = user_id
+        # Recorded on cache entries so an operator can tell what a hashed key
+        # belongs to. It is never part of a cache key: the cache is global by
+        # design, and keying on the story would make every hit impossible.
+        self.story_id = story_id
         # Set for every stage a regeneration re-runs. Those stages were chosen
         # precisely because the user wants a different result, and some of them
         # send byte-identical inputs - a line respeak reaches `speech` with the
@@ -173,6 +178,15 @@ class ModelGateway:
     def _cache_reads_enabled(self) -> bool:
         return cache.enabled() and not self.bypass_cache
 
+    def _source(self, model: str, text: str) -> cache.Source:
+        return cache.Source(
+            stage=self.stage,
+            model=model,
+            story_id=self.story_id,
+            version_id=self.version_id,
+            text=text,
+        )
+
     # --- calls ------------------------------------------------------------
 
     @_RETRY
@@ -243,7 +257,7 @@ class ModelGateway:
         if parsed is None:
             raise ValueError(f"model returned no parseable output for stage {self.stage}")
 
-        cache.put_llm(key, parsed.model_dump(mode="json"))
+        cache.put_llm(key, parsed.model_dump(mode="json"), source=self._source(model, user_content))
         return parsed
 
     @_RETRY
@@ -306,7 +320,9 @@ class ModelGateway:
                 stage=self.stage, model=model,
                 duration_ms=duration_ms, cost_usd=cost,
             ))
-        cache.put_tts(key, data=audio, duration_ms=duration_ms)
+        cache.put_tts(
+            key, data=audio, duration_ms=duration_ms, source=self._source(model, text)
+        )
         return audio, duration_ms
 
     @_RETRY
@@ -339,7 +355,7 @@ class ModelGateway:
                 stage=self.stage, model=model, cost_usd=cost,
             ))
         image = base64.b64decode(payload)
-        cache.put_image(key, data=image)
+        cache.put_image(key, data=image, source=self._source(model, prompt))
         return image
 
 
