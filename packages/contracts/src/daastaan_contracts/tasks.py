@@ -25,6 +25,8 @@ class TaskName(StrEnum):
     INTERPRET_FEEDBACK = "daastaan.feedback.interpret"
     REGENERATE = "daastaan.pipeline.regenerate"
     COMPOSE_VIDEO = "daastaan.video.compose"
+    INGEST_EXTRACT = "daastaan.ingest.extract"
+    EXPORT_AUDIO = "daastaan.export.audio"
 
 
 STAGE_QUEUE: dict[StageName, Queue] = {

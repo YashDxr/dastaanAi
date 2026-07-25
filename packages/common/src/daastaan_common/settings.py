@@ -7,6 +7,7 @@ Postgres and a local directory with no Databricks account involved.
 
 from functools import lru_cache
 from typing import Literal
+from urllib.parse import urlsplit, urlunsplit
 
 from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -61,6 +62,10 @@ class Settings(BaseSettings):
     # Turn it off to force fresh generations while tuning prompts.
     cache_enabled: bool = True
     cache_ttl_seconds: int = 60 * 60 * 24 * 14
+    # A separate logical database from the broker. Celery keeps hundreds of
+    # `celery-task-meta-*` keys in db 0, which buried the cache entries and made
+    # the Redis UI look empty even when the cache was working.
+    cache_db: int = 1
 
     # --- OpenAI -----------------------------------------------------------
     openai_api_key: str | None = None
@@ -116,6 +121,16 @@ class Settings(BaseSettings):
             raise ValueError(f"unsafe configuration for app_env={self.app_env}: " +
                              "; ".join(problems))
         return self
+
+    def cache_redis_url(self) -> str:
+        """`redis_url` pointed at `cache_db`.
+
+        Derived rather than configured separately so that changing REDIS_URL to
+        another host moves the cache with it; a second URL would silently keep
+        writing to the old one.
+        """
+        parsed = urlsplit(self.redis_url)
+        return urlunsplit(parsed._replace(path=f"/{self.cache_db}"))
 
     def sqlalchemy_url(self) -> str:
         """Lakebase is plain Postgres, so only the DSN differs. The password is

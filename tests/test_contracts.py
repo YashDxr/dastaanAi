@@ -13,6 +13,7 @@ from daastaan_contracts import (
     StageName,
     StoryState,
     language_name,
+    limits,
     plan_stages,
 )
 
@@ -108,3 +109,12 @@ class TestLanguageName:
     def test_unknown_code_returns_code(self):
         assert language_name("xx") == "xx"
         assert language_name("tok") == "tok"
+
+
+class TestLimitsAgreeWithEachOther:
+    """Caps that describe the same artifact have to move together. When they drift
+    the UI shows the gap as breakage: an image cap below the scene cap left the
+    last scenes captioned "No artwork"."""
+
+    def test_every_scene_can_be_illustrated(self):
+        assert limits.MAX_IMAGES_PER_STORY >= limits.MAX_SCENES

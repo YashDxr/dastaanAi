@@ -1,5 +1,6 @@
 import re
 from typing import Annotated
+from urllib.parse import quote
 
 from daastaan_common import get_store
 from daastaan_common.models import MediaAsset, Story, StoryVersion
@@ -52,12 +53,47 @@ def parse_range(header: str, size: int) -> tuple[int, int] | None:
     return start, end
 
 
+_UNSAFE_FILENAME = re.compile(r"[^A-Za-z0-9 ._-]+")
+
+
+def download_filename(title: str | None, object_key: str) -> str:
+    """A filename for the Content-Disposition header.
+
+    The title is model output and reaches a response header, so it is reduced to
+    a conservative character set rather than escaped: a header injection here
+    would be worth more to an attacker than a faithful filename is to the user.
+    The extension comes from the object key, which this codebase minted.
+    """
+    extension = object_key.rpartition(".")[2] if "." in object_key else "bin"
+    extension = _UNSAFE_FILENAME.sub("", extension)[:8] or "bin"
+
+    stem = _UNSAFE_FILENAME.sub(" ", title or "")
+    stem = re.sub(r"\s+", " ", stem)[:80]
+    # Leading dots would make the download a hidden file on unix, and a title
+    # that reduced to nothing but punctuation should not become the filename.
+    stem = stem.strip(" ._-") or "daastaan-episode"
+    return f"{stem}.{extension}"
+
+
+def content_disposition(filename: str) -> str:
+    """`filename` for old clients, `filename*` for everything else.
+
+    RFC 6266: the plain parameter must be ASCII, so a title with non-Latin
+    characters would otherwise be mangled or dropped. `download_filename` has
+    already stripped it to ASCII, but the encoded form is what browsers prefer
+    and costs nothing to send.
+    """
+    quoted = quote(filename, safe="")
+    return f"attachment; filename=\"{filename}\"; filename*=UTF-8''{quoted}"
+
+
 @router.get("/{asset_id}")
 def stream_asset(
     asset_id: str,
     session: SessionDep,
     user: CurrentUser,
     range_header: Annotated[str | None, Header(alias="Range")] = None,
+    download: bool = False,
 ) -> Response:
     """Serve audio and images through the API rather than handing out storage
     URLs, so ownership is re-checked on every fetch and artifacts are never
@@ -95,6 +131,10 @@ def stream_asset(
         "Cache-Control": "private, max-age=3600, immutable",
         "ETag": f'"{asset.id}"',
     }
+    if download:
+        headers["Content-Disposition"] = content_disposition(
+            download_filename(story.title, asset.object_key)
+        )
 
     span = parse_range(range_header, size) if range_header else None
     if span is None:

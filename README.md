@@ -68,6 +68,30 @@ Every HTTP response includes `X-Request-ID`. With `LOG_JSON=true` and `make obse
 
 Or use the provisioned **Daastaan request debugger** dashboard.
 
+### Inspecting the response cache
+
+Redis Insight opens on the cache automatically: the connection is preconfigured
+to `redis:6379` **db 1**, aliased `daastaan-cache`. Filter on `daastaan:cache:*`,
+which splits into:
+
+| Pattern | Holds |
+| --- | --- |
+| `daastaan:cache:llm:<sha>` | The structured completion itself |
+| `daastaan:cache:tts:<sha>` | An object-store *pointer*, not audio bytes |
+| `daastaan:cache:image:<sha>` | An object-store *pointer*, not image bytes |
+| `daastaan:cache:index:<story_id>` | Set of every key that story wrote |
+
+The cache is on db 1 specifically so Celery's `celery-task-meta-*` keys, which
+live on db 0 and outnumber cache entries several times over, stay out of the
+way. Every entry carries `_stage`, `_model`, `_story_id`, `_version_id` and a
+short `_preview`, so a hashed key can be traced back to what produced it.
+
+Two things that look like bugs and are not. Stories generated before the cache
+existed wrote no keys and nothing backfills them, so they will not appear until
+identical content is generated again. And keys are content-addressed with no
+story id in them - that is what lets two users share a hit - so the per-story
+index is the only way to browse by story.
+
 To iterate faster, run Redis/(optional) Postgres in Docker and the services on your host:
 
 ```bash

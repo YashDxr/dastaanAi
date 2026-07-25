@@ -24,10 +24,12 @@ export function Studio({ user, storyId, onLogout, onHome, onCompose }: Props) {
   const [busy, setBusy] = useState(false)
   const [tab, setTab] = useState<'episode' | 'scenes'>('episode')
   const [seekLineId, setSeekLineId] = useState<string | null>(null)
-  // The version a respeak was requested from. The seek has to survive until the
-  // rebuilt mix arrives, so it can land on the same line in the new episode and
-  // not just in the one being replaced.
+  // A respeak is only audible once assembly has rebuilt the mix, so the jump to
+  // the line waits for that. These hold the request in the meantime: the line to
+  // land on, and the version it was requested from, which is how a rebuilt mix is
+  // told apart from the one being replaced.
   const respeakFromVersion = useRef<string | null>(null)
+  const pendingRespeakLine = useRef<string | null>(null)
   // Assets from the last ready version — kept while regenerating so Play stays up.
   const [stickyAssets, setStickyAssets] = useState<StoryDetail['assets']>([])
 
@@ -56,6 +58,20 @@ export function Studio({ user, storyId, onLogout, onHome, onCompose }: Props) {
           for (const asset of d.assets) merged.set(slot(asset), asset)
           return [...merged.values()]
         })
+      }
+      // The rebuilt mix has landed, so the respeak is finally something the user
+      // can hear. Batched with `setDetail` above so the player picks up the new
+      // episode and the target line in one commit rather than seeking twice.
+      const awaiting = pendingRespeakLine.current
+      if (
+        awaiting &&
+        d.version?.id &&
+        d.version.id !== respeakFromVersion.current &&
+        d.assets.some((a) => a.kind === 'final_episode')
+      ) {
+        pendingRespeakLine.current = null
+        respeakFromVersion.current = null
+        setSeekLineId(awaiting)
       }
     } catch (err) {
       setError(formatError(err))
@@ -97,9 +113,11 @@ export function Studio({ user, storyId, onLogout, onHome, onCompose }: Props) {
   async function respeakLine(lineId: string) {
     setBusy(true)
     respeakFromVersion.current = detail?.version?.id ?? null
-    // Move the current mix to this line right away so the click feels local,
-    // then kick off the regeneration that rebuilds it.
-    setSeekLineId(lineId)
+    // Note the line and leave playback alone. Seeking here would play the take
+    // the user just asked to replace, and then the rebuilt mix would play the
+    // line again - so a single respeak was heard twice. The disabled button and
+    // the progress stepper already acknowledge the click.
+    pendingRespeakLine.current = lineId
     try {
       await storiesApi.regenerate(storyId, {
         scope: 'line',
@@ -111,7 +129,7 @@ export function Studio({ user, storyId, onLogout, onHome, onCompose }: Props) {
     } catch (err) {
       setError(formatError(err))
       respeakFromVersion.current = null
-      setSeekLineId(null)
+      pendingRespeakLine.current = null
     } finally {
       setBusy(false)
     }
@@ -189,16 +207,10 @@ export function Studio({ user, storyId, onLogout, onHome, onCompose }: Props) {
                   assets={playerAssets}
                   lines={state?.lines ?? []}
                   title={detail.story.title}
+                  storyId={storyId}
                   seekLineId={seekLineId}
                   regenerating={regenerating}
-                  onSeekHandled={() => {
-                    // Seeking the outgoing mix is only a courtesy jump. Keep the
-                    // request alive until a newer version has been seeked too.
-                    const from = respeakFromVersion.current
-                    if (from && detail?.version?.id === from) return
-                    respeakFromVersion.current = null
-                    setSeekLineId(null)
-                  }}
+                  onSeekHandled={() => setSeekLineId(null)}
                 />
                 {state?.arc_summary && (
                   <section className="arc-panel">

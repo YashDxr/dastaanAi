@@ -73,9 +73,40 @@ class CharacterRole(StrEnum):
     SUPPORTING = "supporting"
 
 
+class VoiceGender(StrEnum):
+    """How a character should read, not what they are.
+
+    `NEUTRAL` is a real answer rather than a refusal: narrators, choruses and
+    non-human characters genuinely have no gendered timbre, and forcing them into
+    one is what makes a cast sound like two people.
+    """
+
+    FEMININE = "feminine"
+    MASCULINE = "masculine"
+    NEUTRAL = "neutral"
+
+
+class VoiceAge(StrEnum):
+    CHILD = "child"
+    YOUNG = "young"
+    ADULT = "adult"
+    ELDER = "elder"
+
+
 class AssetKind(StrEnum):
     LINE_AUDIO = "line_audio"
     SCENE_IMAGE = "scene_image"
     MUSIC_BED = "music_bed"
     FINAL_EPISODE = "final_episode"
     FINAL_VIDEO = "final_video"
+    # A transcode of FINAL_EPISODE for download. Kept apart from the episode so
+    # the player always resolves the master and never picks up a variant.
+    EPISODE_EXPORT = "episode_export"
+
+
+class IngestStatus(StrEnum):
+    PENDING = "pending"
+    EXTRACTING = "extracting"
+    CLEANING = "cleaning"
+    READY = "ready"
+    FAILED = "failed"
