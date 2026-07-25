@@ -7,7 +7,6 @@ Postgres and a local directory with no Databricks account involved.
 
 from functools import lru_cache
 from typing import Literal
-from urllib.parse import urlparse
 
 from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -71,21 +70,6 @@ class Settings(BaseSettings):
     model_image: str = "gpt-image-1"
     model_moderation: str = "omni-moderation-latest"
 
-    # --- local music sidecar ---------------------------------------------
-    # The MLX model runs natively on an Apple-Silicon Mac. Docker workers only
-    # call its private HTTP API; they never load model weights themselves.
-    music_enabled: bool = False
-    # Only the dedicated music worker needs the bearer/HMAC pair. Keeping this
-    # separate from MUSIC_ENABLED means API, agent, TTS, image, and assembly
-    # containers can orchestrate the optional stage without receiving credentials.
-    music_client_enabled: bool = False
-    music_service_base_url: str = "http://host.docker.internal:8787"
-    music_service_token: str | None = None
-    music_service_hmac_secret: str | None = None
-    music_service_timeout_seconds: int = Field(default=600, ge=10, le=900)
-    music_service_poll_interval_seconds: float = Field(default=2.0, ge=0.2, le=30.0)
-    music_duration_seconds: int = Field(default=30, ge=5, le=60)
-
     # --- Databricks (optional everywhere) ---------------------------------
     databricks_host: str | None = None
     databricks_token: str | None = None
@@ -121,44 +105,6 @@ class Settings(BaseSettings):
         Anyone with the repo could mint an admin session if this default reached
         a deployed environment, so it is a hard error, not a warning.
         """
-        # Unlike the application cookie, the music sidecar can be reachable by
-        # Docker containers or a Tailnet even during local development.  Only
-        # the music worker is permitted to possess its credentials.
-        music_problems: list[str] = []
-        if self.music_enabled and self.music_client_enabled:
-            if not self.music_service_token:
-                music_problems.append(
-                    "MUSIC_SERVICE_TOKEN is required when MUSIC_ENABLED=true and "
-                    "MUSIC_CLIENT_ENABLED=true"
-                )
-            if not self.music_service_hmac_secret:
-                music_problems.append(
-                    "MUSIC_SERVICE_HMAC_SECRET is required when MUSIC_ENABLED=true and "
-                    "MUSIC_CLIENT_ENABLED=true"
-                )
-            elif len(self.music_service_hmac_secret) < 32:
-                music_problems.append("MUSIC_SERVICE_HMAC_SECRET must be at least 32 characters")
-            if self.music_service_token and len(self.music_service_token) < 32:
-                music_problems.append("MUSIC_SERVICE_TOKEN must be at least 32 characters")
-        parsed_music_url = urlparse(self.music_service_base_url)
-        host = parsed_music_url.hostname or ""
-        if parsed_music_url.scheme not in {"http", "https"} or not host:
-            music_problems.append("MUSIC_SERVICE_BASE_URL must be an absolute HTTP(S) URL")
-        elif parsed_music_url.scheme == "http" and host not in {
-            "127.0.0.1",
-            "localhost",
-            "host.docker.internal",
-        }:
-            music_problems.append(
-                "MUSIC_SERVICE_BASE_URL may use HTTP only for localhost or host.docker.internal"
-            )
-        elif parsed_music_url.scheme == "https" and not host.endswith(".ts.net"):
-            music_problems.append(
-                "MUSIC_SERVICE_BASE_URL may use HTTPS only for a private Tailnet .ts.net host"
-            )
-        if music_problems:
-            raise ValueError("unsafe music configuration: " + "; ".join(music_problems))
-
         if self.app_env == "local":
             return self
         problems = []

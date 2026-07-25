@@ -25,15 +25,7 @@ FANOUT_STAGES: tuple[StageName, ...] = (
     StageName.IMAGE_GENERATION,
 )
 
-# Music is a single, long-running media task rather than a per-line/scene
-# fan-out, but it still belongs in the ordered pipeline and can be regenerated
-# independently of narration and artwork.
-PIPELINE_STAGES: tuple[StageName, ...] = (
-    *AGENT_STAGES,
-    *FANOUT_STAGES,
-    StageName.MUSIC_GENERATION,
-    StageName.ASSEMBLY,
-)
+PIPELINE_STAGES: tuple[StageName, ...] = (*AGENT_STAGES, *FANOUT_STAGES, StageName.ASSEMBLY)
 
 _STAGE_INDEX: dict[StageName, int] = {stage: i for i, stage in enumerate(PIPELINE_STAGES)}
 
@@ -43,7 +35,6 @@ SCOPE_ENTRY_POINTS: dict[Scope, frozenset[StageName]] = {
     Scope.LINE: frozenset({StageName.EMOTION_TAGGING, StageName.TTS_SYNTHESIS}),
     Scope.CHARACTER: frozenset({StageName.VOICE_ASSIGNMENT, StageName.TTS_SYNTHESIS}),
     Scope.SCENE: frozenset({StageName.IMAGE_GENERATION, StageName.STORY_UNDERSTANDING}),
-    Scope.MUSIC: frozenset({StageName.MUSIC_GENERATION}),
     Scope.FULL_STORY: frozenset(PIPELINE_STAGES),
 }
 
@@ -60,7 +51,6 @@ SCOPE_AFFECTED_STAGES: dict[Scope, frozenset[StageName]] = {
     ),
     # A scene rewrite genuinely cascades, so it keeps the full downstream slice.
     Scope.SCENE: frozenset(PIPELINE_STAGES),
-    Scope.MUSIC: frozenset({StageName.MUSIC_GENERATION, StageName.ASSEMBLY}),
     Scope.FULL_STORY: frozenset(PIPELINE_STAGES),
 }
 

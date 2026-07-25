@@ -51,9 +51,6 @@ def invalidated_dedupe_keys(
             scene_ids = [scene.id for scene in state.scenes]
         stale |= {ids.dedupe_key(AssetKind.SCENE_IMAGE, scene_id=sid) for sid in scene_ids}
 
-    if StageName.MUSIC_GENERATION in planned_set:
-        stale.add(ids.dedupe_key(AssetKind.MUSIC_BED))
-
     return stale
 
 

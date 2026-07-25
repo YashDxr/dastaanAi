@@ -245,7 +245,7 @@ def regenerate(
 def _assert_target_exists(parent: StoryVersion, body: RegenerateRequest) -> None:
     """A scoped regeneration must point at something that actually exists in the
     parent version, so an arbitrary id cannot be smuggled through to a worker."""
-    if body.scope in {Scope.FULL_STORY, Scope.MUSIC}:
+    if body.scope is Scope.FULL_STORY:
         return
     if not body.target_id:
         raise HTTPException(

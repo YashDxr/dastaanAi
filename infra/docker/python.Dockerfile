@@ -31,7 +31,6 @@ COPY packages/contracts/pyproject.toml packages/contracts/
 COPY packages/common/pyproject.toml packages/common/
 COPY services/api/pyproject.toml services/api/
 COPY services/agent/pyproject.toml services/agent/
-COPY services/music/pyproject.toml services/music/
 RUN uv sync --all-packages --frozen --no-install-workspace --no-dev
 
 COPY packages packages

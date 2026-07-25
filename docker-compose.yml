@@ -1,4 +1,4 @@
-# One Redis, optional Compose Postgres, one image, six Python processes.
+# One Redis, optional Compose Postgres, one image, five Python processes.
 #
 # POSTGRES_MODE in .env controls the database:
 #   docker → `make up` enables the `postgres` Compose profile
@@ -108,26 +108,6 @@ services:
     command:
       ["celery", "-A", "daastaan_agent.worker", "worker",
        "-Q", "media", "-c", "6", "-n", "media@%h", "--loglevel", "info"]
-
-  # Calls the native MLX sidecar on the Mac.  This is intentionally a separate
-  # one-concurrency worker: the laptop model is serialized and must not block
-  # six concurrent TTS calls in worker-media.
-  worker-music:
-    <<: *python-image
-    # The rest of the Compose services inherit only .env. This protected,
-    # ignored env file is the sole route by which sidecar credentials reach a
-    # container, and it is injected only into the worker that calls the Mac.
-    env_file:
-      - .env
-      - path: .env.music
-        required: false
-    environment:
-      MUSIC_CLIENT_ENABLED: "true"
-    labels:
-      service: worker-music
-    command:
-      ["celery", "-A", "daastaan_agent.worker", "worker",
-       "-Q", "music", "-c", "1", "-n", "music@%h", "--loglevel", "info"]
 
   worker-assembly:
     <<: *python-image

@@ -120,10 +120,7 @@ def compose_episode(clips: list[Clip], music_bed: bytes | None = None) -> bytes:
         filters.append(f"{concat_inputs}concat=n={len(clips)}:v=0:a=1[narration]")
 
         if music_bed:
-            # The local Stable Audio sidecar returns validated PCM WAV.  ffmpeg
-            # detects the format from the file header, but the suffix matters
-            # for diagnostics and avoids claiming a WAV is an MP3.
-            bed_path = workdir / "bed.wav"
+            bed_path = workdir / "bed.mp3"
             bed_path.write_bytes(music_bed)
             # -stream_loop repeats the bed so a short track still covers a long
             # episode; duration=first ends the mix when the narration ends.

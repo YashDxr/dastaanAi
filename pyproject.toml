@@ -14,7 +14,6 @@ dev = [
     "daastaan-common",
     "daastaan-api",
     "daastaan-agent",
-    "daastaan-music",
     "ruff>=0.14.0",
     "mypy>=1.18.0",
     "pytest>=8.4.0",
@@ -36,7 +35,6 @@ daastaan-contracts = { workspace = true }
 daastaan-common = { workspace = true }
 daastaan-api = { workspace = true }
 daastaan-agent = { workspace = true }
-daastaan-music = { workspace = true }
 
 [tool.ruff]
 line-length = 100

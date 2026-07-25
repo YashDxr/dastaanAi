@@ -41,7 +41,6 @@ def create_celery(name: str = "daastaan") -> Celery:
         task_routes={
             TaskName.TTS_LINE.value: {"queue": Queue.MEDIA.value},
             TaskName.GEN_IMAGE.value: {"queue": Queue.MEDIA.value},
-            TaskName.GEN_MUSIC.value: {"queue": Queue.MUSIC.value},
             TaskName.ASSEMBLE.value: {"queue": Queue.ASSEMBLY.value},
             TaskName.INTERPRET_FEEDBACK.value: {"queue": Queue.AGENTS.value},
             TaskName.RUN_PIPELINE.value: {"queue": Queue.AGENTS.value},

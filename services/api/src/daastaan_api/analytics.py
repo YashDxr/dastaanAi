@@ -40,20 +40,14 @@ def _duration_ms(start: datetime | None, end: datetime | None) -> int | None:
 
 
 def _derive_status(statuses: list[str]) -> str:
-    """A run is only as good as its required stages.
-
-    An optional local music bed may be skipped when the private Mac is offline;
-    assembly still produces a complete narration-only episode. That outcome is
-    visible in the stage history but must not make the run look perpetually
-    running or failed in the admin console.
-    """
+    """A run is only as good as its worst stage."""
     if not statuses:
         return "pending"
     if JobStatus.FAILED in statuses:
         return "failed"
     if JobStatus.RUNNING in statuses:
         return "running"
-    if all(s in {JobStatus.SUCCEEDED, JobStatus.SKIPPED} for s in statuses):
+    if all(s == JobStatus.SUCCEEDED for s in statuses):
         return "succeeded"
     return "running"
 

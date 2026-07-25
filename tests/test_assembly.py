@@ -3,18 +3,15 @@
 import io
 import shutil
 import struct
-import wave
 
 import pytest
 from daastaan_agent.assembly import (
     AssemblyError,
-    Clip,
     SceneFrame,
     build_scene_timeline,
-    compose_episode,
     compose_video,
-    probe_duration_ms,
 )
+
 
 # --- helpers --------------------------------------------------------------
 
@@ -59,16 +56,6 @@ def _silent_mp3() -> bytes:
     frame = header + b"\x00" * 413
     # Repeat a few frames to ensure ffmpeg can decode it
     return frame * 10
-
-
-def _silent_wav(seconds: int = 5) -> bytes:
-    output = io.BytesIO()
-    with wave.open(output, "wb") as handle:
-        handle.setnchannels(2)
-        handle.setsampwidth(2)
-        handle.setframerate(44_100)
-        handle.writeframes(b"\x00\x00" * 2 * 44_100 * seconds)
-    return output.getvalue()
 
 
 # --- build_scene_timeline -------------------------------------------------
@@ -158,18 +145,3 @@ class TestComposeVideo:
     def test_empty_frames_raises(self):
         with pytest.raises(AssemblyError, match="no scene frames"):
             compose_video(b"audio", [])
-
-
-@pytest.mark.skipif(
-    shutil.which("ffmpeg") is None or shutil.which("ffprobe") is None,
-    reason="ffmpeg/ffprobe not installed",
-)
-def test_compose_episode_mixes_a_valid_wav_music_bed():
-    """Exercise the same WAV-to-MP3 mix path used by the music worker.
-
-    The host laptop may skip this, but the Python Docker image installs both
-    ffmpeg tools so CI verifies that a Stable-Audio-format bed is mixable.
-    """
-    episode = compose_episode([Clip(audio=_silent_mp3())], music_bed=_silent_wav())
-    assert episode
-    assert probe_duration_ms(episode) > 0
