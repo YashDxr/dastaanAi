@@ -1,0 +1,22 @@
+{
+  "name": "daastaan",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Daastaan AI - JavaScript workspaces (user app, admin panel, shared API types)",
+  "workspaces": [
+    "apps/web",
+    "apps/admin",
+    "packages/api-types"
+  ],
+  "comment:overrides": "brace-expansion is pinned past GHSA-mh99-v99m-4gvg. The remaining js-yaml advisory (GHSA-52cp-r559-cp3m) comes from @redocly/openapi-core, which pins js-yaml exactly and ignores overrides; it is a build-time-only dependency of the OpenAPI type generator, which parses only our own openapi.json, so it is not reachable by user input. Drop this note once openapi-typescript ships a bumped Redocly.",
+  "overrides": {
+    "brace-expansion": "^2.0.3"
+  },
+  "scripts": {
+    "dev:web": "npm run dev --workspace @daastaan/web",
+    "dev:admin": "npm run dev --workspace @daastaan/admin",
+    "build": "npm run build --workspaces --if-present",
+    "lint": "npm run lint --workspaces --if-present",
+    "gen:types": "npm run generate --workspace @daastaan/api-types"
+  }
+}

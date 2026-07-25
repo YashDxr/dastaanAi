@@ -1,0 +1,95 @@
+:root {
+  color-scheme: dark;
+  --bg: #0c0f14;
+  --panel: #141a23;
+  --text: #e6ebf2;
+  --muted: #8b97a8;
+  --accent: #4da3ff;
+  --error: #ff8a8a;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+
+.shell {
+  max-width: 60rem;
+  margin: 0 auto;
+  padding: 2.5rem 1.5rem;
+}
+
+h1 {
+  margin: 0 0 2rem;
+  font-size: 1.75rem;
+}
+
+section {
+  background: var(--panel);
+  border: 1px solid #1f2733;
+  border-radius: 0.75rem;
+  padding: 1.25rem 1.5rem;
+  margin-bottom: 1.25rem;
+}
+
+h2 {
+  margin: 0 0 0.75rem;
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+}
+
+.figure {
+  font-size: 2rem;
+  font-weight: 600;
+  margin: 0 0 0.75rem;
+}
+
+.figure span {
+  font-size: 1rem;
+  font-weight: 400;
+  color: var(--muted);
+}
+
+.meter {
+  height: 0.5rem;
+  border-radius: 999px;
+  background: #1f2733;
+  overflow: hidden;
+}
+
+.fill {
+  height: 100%;
+  background: linear-gradient(90deg, var(--accent), #7ee0a5);
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-variant-numeric: tabular-nums;
+}
+
+th,
+td {
+  text-align: left;
+  padding: 0.5rem 0;
+  border-bottom: 1px solid #1f2733;
+}
+
+th {
+  color: var(--muted);
+  font-weight: 500;
+  font-size: 0.85rem;
+}
+
+td:last-child,
+th:last-child {
+  text-align: right;
+}
+
+.error {
+  color: var(--error);
+}

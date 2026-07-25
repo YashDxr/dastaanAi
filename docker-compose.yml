@@ -1,0 +1,114 @@
+# One Postgres, one Redis, one image, five Python processes.
+#
+# The worker pools are split by queue rather than scaled as one pool because the
+# work is not interchangeable: a ten-minute ffmpeg assembly must never sit behind
+# a backlog of TTS calls, and the media pool wants far more concurrency than the
+# CPU-bound assembly pool.
+#
+# The `media` volume is shared by the API and every worker. With the local
+# storage backend the workers write audio to it and the API streams from it, so
+# they must see the same filesystem. Switching storage_backend to uc_volume makes
+# that volume redundant.
+
+name: daastaan
+
+x-python-image: &python-image
+  build:
+    context: .
+    dockerfile: infra/docker/python.Dockerfile
+  env_file: .env
+  volumes:
+    - media:/data/media
+  depends_on:
+    postgres:
+      condition: service_healthy
+    redis:
+      condition: service_healthy
+  restart: unless-stopped
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: daastaan
+      POSTGRES_PASSWORD: daastaan
+      POSTGRES_DB: daastaan
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U daastaan -d daastaan"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  redis:
+    image: redis:8-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    ports:
+      - "6379:6379"
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  api:
+    <<: *python-image
+    command:
+      ["uvicorn", "daastaan_api.main:app", "--host", "0.0.0.0", "--port", "8000"]
+    ports:
+      - "8000:8000"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8000/api/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 20s
+
+  agent:
+    <<: *python-image
+    command:
+      ["uvicorn", "daastaan_agent.main:app", "--host", "0.0.0.0", "--port", "8100"]
+    ports:
+      - "8100:8100"
+
+  # Sequential LLM stages. Concurrency 4 lets several stories progress at once
+  # without any single story's stages overlapping - the chain enforces order.
+  worker-agents:
+    <<: *python-image
+    command:
+      ["celery", "-A", "daastaan_agent.worker", "worker",
+       "-Q", "agents", "-c", "4", "-n", "agents@%h", "--loglevel", "info"]
+
+  # The per-line TTS and per-scene image fan-out. This is where the wall-clock
+  # time of a generation is actually decided.
+  worker-media:
+    <<: *python-image
+    command:
+      ["celery", "-A", "daastaan_agent.worker", "worker",
+       "-Q", "media", "-c", "6", "-n", "media@%h", "--loglevel", "info"]
+
+  # ffmpeg is CPU-bound; parallel assemblies would only contend for cores.
+  worker-assembly:
+    <<: *python-image
+    command:
+      ["celery", "-A", "daastaan_agent.worker", "worker",
+       "-Q", "assembly", "-c", "1", "-n", "assembly@%h", "--loglevel", "info"]
+
+  # Optional: `docker compose --profile tools up flower` for queue visibility.
+  flower:
+    <<: *python-image
+    profiles: ["tools"]
+    command:
+      ["celery", "-A", "daastaan_agent.worker", "flower", "--port=5555"]
+    ports:
+      - "5555:5555"
+
+volumes:
+  pgdata:
+  redisdata:
+  media:

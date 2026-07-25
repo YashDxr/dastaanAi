@@ -1,0 +1,59 @@
+[project]
+name = "daastaan-workspace"
+version = "0.1.0"
+description = "Daastaan AI - monorepo root"
+requires-python = ">=3.12,<3.13"
+dependencies = []
+
+[dependency-groups]
+# The workspace members are dev dependencies of the root so that a plain
+# `uv run` at the repo root has every service importable and does not prune
+# them from the shared environment.
+dev = [
+    "daastaan-contracts",
+    "daastaan-common",
+    "daastaan-api",
+    "daastaan-agent",
+    "ruff>=0.14.0",
+    "mypy>=1.18.0",
+    "pytest>=8.4.0",
+    "pytest-asyncio>=1.2.0",
+    "httpx>=0.28.0",
+]
+
+[tool.uv]
+package = false
+
+[tool.uv.workspace]
+members = ["packages/*", "services/*"]
+# packages/api-types is a TypeScript package in the npm workspace; it has no
+# pyproject.toml and uv would otherwise fail on the glob above.
+exclude = ["packages/api-types"]
+
+[tool.uv.sources]
+daastaan-contracts = { workspace = true }
+daastaan-common = { workspace = true }
+daastaan-api = { workspace = true }
+daastaan-agent = { workspace = true }
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+extend-exclude = ["apps"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "S", "ASYNC"]
+ignore = ["B008"]
+
+[tool.ruff.lint.per-file-ignores]
+"**/tests/*" = ["S101"]
+
+[tool.mypy]
+python_version = "3.12"
+plugins = ["pydantic.mypy"]
+ignore_missing_imports = true
+exclude = ["apps/"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]

@@ -1,0 +1,72 @@
+"""Handing work to the agent service.
+
+Dispatch is by task *name*, never by importing the task function. That is what
+lets the API image stay free of LangGraph, OpenAI, and ffmpeg while both services
+still agree on the wire format through `daastaan_contracts.TaskName`.
+"""
+
+import structlog
+from daastaan_common import celery_app
+from daastaan_contracts import Queue, StageName, TaskName
+
+log = structlog.get_logger(__name__)
+
+
+def dispatch_pipeline(*, story_id: str, version_id: str, user_id: str) -> str:
+    task = celery_app.send_task(
+        TaskName.RUN_PIPELINE.value,
+        kwargs={"story_id": story_id, "version_id": version_id, "user_id": user_id},
+        queue=Queue.AGENTS.value,
+    )
+    log.info("dispatched_pipeline", story_id=story_id, version_id=version_id, task_id=task.id)
+    return task.id
+
+
+def dispatch_regeneration(
+    *,
+    story_id: str,
+    version_id: str,
+    user_id: str,
+    stages: list[StageName],
+    scope: str,
+    target_id: str | None,
+    instruction_delta: str,
+) -> str:
+    task = celery_app.send_task(
+        TaskName.REGENERATE.value,
+        kwargs={
+            "story_id": story_id,
+            "version_id": version_id,
+            "user_id": user_id,
+            "stages": [stage.value for stage in stages],
+            "scope": scope,
+            "target_id": target_id,
+            "instruction_delta": instruction_delta,
+        },
+        queue=Queue.AGENTS.value,
+    )
+    log.info(
+        "dispatched_regeneration",
+        story_id=story_id,
+        version_id=version_id,
+        stages=[stage.value for stage in stages],
+        task_id=task.id,
+    )
+    return task.id
+
+
+def dispatch_feedback_interpretation(
+    *, story_id: str, version_id: str, user_id: str, feedback_id: str
+) -> str:
+    task = celery_app.send_task(
+        TaskName.INTERPRET_FEEDBACK.value,
+        kwargs={
+            "story_id": story_id,
+            "version_id": version_id,
+            "user_id": user_id,
+            "feedback_id": feedback_id,
+        },
+        queue=Queue.AGENTS.value,
+    )
+    log.info("dispatched_feedback", feedback_id=feedback_id, task_id=task.id)
+    return task.id

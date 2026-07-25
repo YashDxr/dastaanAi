@@ -1,0 +1,16 @@
+.git/
+.venv/
+node_modules/
+**/node_modules/
+**/dist/
+__pycache__/
+**/__pycache__/
+*.egg-info/
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+.media/
+apps/
+.env
+.env.local
+.DS_Store
