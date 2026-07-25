@@ -6,19 +6,25 @@ import { FeedbackComposer } from '../components/FeedbackComposer'
 import { ProgressStepper } from '../components/ProgressStepper'
 import { ScenePanel } from '../components/ScenePanel'
 import { ScriptPanel } from '../components/ScriptPanel'
+import { VideoEditor } from '../components/editor/VideoEditor'
 import { formatError, stories as storiesApi, watchProgress } from '../api'
 import { applyEvent, emptyLive } from '../live'
-import type { FeedbackEntry, Progress, StoryDetail, User } from '../types'
+import { studioLink } from '../routing'
+import type { FeedbackEntry, Progress, StoryDetail, StudioTab, User } from '../types'
 
 type Props = {
   user: User
   storyId: string
+  /** Which panel is open. Owned by `App` so it can come from a deep link and be
+   *  written back to the URL, which is what makes the editor linkable. */
+  tab: StudioTab
+  onTab: (tab: StudioTab) => void
   onLogout: () => void
   onHome: () => void
   onCompose: () => void
 }
 
-export function Studio({ user, storyId, onLogout, onHome, onCompose }: Props) {
+export function Studio({ user, storyId, tab, onTab, onLogout, onHome, onCompose }: Props) {
   const [detail, setDetail] = useState<StoryDetail | null>(null)
   const [progress, setProgress] = useState<Progress | null>(null)
   // Live progress, folded from the event stream. Kept beside `progress` rather than
@@ -27,8 +33,11 @@ export function Studio({ user, storyId, onLogout, onHome, onCompose }: Props) {
   const [feedback, setFeedback] = useState<FeedbackEntry[]>([])
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
-  const [tab, setTab] = useState<'episode' | 'scenes'>('episode')
   const [seekLineId, setSeekLineId] = useState<string | null>(null)
+  // The editor loads a timeline, artwork and every saved cut, so it is mounted on
+  // first visit rather than with the other panels — and then kept mounted, so
+  // stepping back to the episode does not throw away an in-progress edit.
+  const [editorMounted, setEditorMounted] = useState(tab === 'editor')
   // A respeak is only audible once assembly has rebuilt the mix, so the jump to
   // the line waits for that. These hold the request in the meantime: the line to
   // land on, and the version it was requested from, which is how a rebuilt mix is
@@ -106,6 +115,10 @@ export function Studio({ user, storyId, onLogout, onHome, onCompose }: Props) {
     setLive(emptyLive)
   }, [storyId, detail?.version?.id])
 
+  useEffect(() => {
+    if (tab === 'editor') setEditorMounted(true)
+  }, [tab])
+
   const state = detail?.state
   const regenerating = detail?.story.status === 'generating'
   // Interpretation happens before any job row exists, so the progress stepper
@@ -133,6 +146,10 @@ export function Studio({ user, storyId, onLogout, onHome, onCompose }: Props) {
   const scenes = state?.scenes ?? []
   const hasMusicBed = playerAssets.some((a) => a.kind === 'music_bed')
     || stickyAssets.some((a) => a.kind === 'music_bed')
+  // The editor cuts scene artwork against the recorded lines, so it is only worth
+  // pointing at once both exist and the run has finished producing them.
+  const canEdit =
+    detail?.story.status === 'ready' && images.length > 0 && (state?.lines.length ?? 0) > 0
 
   async function respeakLine(lineId: string) {
     setBusy(true)
@@ -196,6 +213,7 @@ export function Studio({ user, storyId, onLogout, onHome, onCompose }: Props) {
                 [
                   ['episode', 'Episode'],
                   ['scenes', 'Scenes'],
+                  ['editor', 'Editor'],
                 ] as const
               ).map(([id, label]) => (
                 <button
@@ -206,12 +224,13 @@ export function Studio({ user, storyId, onLogout, onHome, onCompose }: Props) {
                   aria-selected={tab === id}
                   aria-controls={`studio-panel-${id}`}
                   className={tab === id ? 'active' : ''}
-                  onClick={() => setTab(id)}
+                  onClick={() => onTab(id)}
                 >
                   {label}
                   {id === 'scenes' && scenes.length > 0 && (
                     <span className="tab-count">{scenes.length}</span>
                   )}
+                  {id === 'editor' && canEdit && <span className="tab-count">New</span>}
                 </button>
               ))}
             </nav>
@@ -238,11 +257,14 @@ export function Studio({ user, storyId, onLogout, onHome, onCompose }: Props) {
                   onSeekHandled={() => setSeekLineId(null)}
                 />
                 {finalVideo ? (
-                  <VideoPlayer
-                    asset={finalVideo}
-                    title={detail.story.title}
-                    regenerating={regenerating}
-                  />
+                  <>
+                    <VideoPlayer
+                      asset={finalVideo}
+                      title={detail.story.title}
+                      regenerating={regenerating}
+                    />
+                    <EditorInvite storyId={storyId} onOpen={() => onTab('editor')} />
+                  </>
                 ) : wantsVideo ? (
                   <VideoPlayerEmpty regenerating={regenerating} />
                 ) : null}
@@ -289,6 +311,15 @@ export function Studio({ user, storyId, onLogout, onHome, onCompose }: Props) {
             </div>
 
             <div
+              id="studio-panel-editor"
+              role="tabpanel"
+              aria-labelledby="studio-tab-editor"
+              hidden={tab !== 'editor'}
+            >
+              {editorMounted && <VideoEditor storyId={storyId} active={tab === 'editor'} />}
+            </div>
+
+            <div
               id="studio-panel-scenes"
               role="tabpanel"
               aria-labelledby="studio-tab-scenes"
@@ -303,7 +334,7 @@ export function Studio({ user, storyId, onLogout, onHome, onCompose }: Props) {
                   // Jump the player, then show it: the audio element lives in the
                   // Episode panel and is only hidden, so the seek still applies.
                   setSeekLineId(lineId)
-                  setTab('episode')
+                  onTab('episode')
                 }}
               />
             </div>
@@ -311,5 +342,40 @@ export function Studio({ user, storyId, onLogout, onHome, onCompose }: Props) {
         )}
       </main>
     </div>
+  )
+}
+
+/**
+ * The handoff from "your video is ready" to the editor.
+ *
+ * A button and a link, both: the button is the obvious next step for someone
+ * already on the page, and the anchor carries the deep link, so it can be
+ * middle-clicked, copied, or pasted into the message that tells someone their
+ * episode is done.
+ */
+function EditorInvite({ storyId, onOpen }: { storyId: string; onOpen: () => void }) {
+  return (
+    <section className="editor-invite">
+      <div>
+        <p className="eyebrow">Make it shareable</p>
+        <p className="muted">
+          Trim it, restyle the captions, cut a vertical version for Reels, lay your own
+          music underneath, and get a link anyone can watch.
+        </p>
+      </div>
+      <a
+        className="btn primary"
+        href={studioLink(storyId, 'editor')}
+        onClick={(event) => {
+          // Same-document navigation, so the click is handled in place rather than
+          // letting the fragment change and the app re-derive the view from it.
+          if (event.metaKey || event.ctrlKey || event.shiftKey || event.button !== 0) return
+          event.preventDefault()
+          onOpen()
+        }}
+      >
+        Open the editor
+      </a>
+    </section>
   )
 }

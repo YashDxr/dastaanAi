@@ -135,6 +135,11 @@ class Settings(BaseSettings):
     # --- service wiring ---------------------------------------------------
     api_base_url: str = "http://localhost:8000"
     agent_base_url: str = "http://localhost:8100"
+    # Where the user app is served from. Only share links need it: they are pasted
+    # into a chat rather than followed from a page, so they cannot be relative,
+    # and deriving them from the request would bake in whatever proxy or tunnel
+    # host the owner happened to be using when they pressed Share.
+    web_base_url: str = "http://localhost:5173"
     cors_origins: list[str] = ["http://localhost:5173", "http://localhost:5174"]
 
     @model_validator(mode="after")

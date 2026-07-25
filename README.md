@@ -10,8 +10,8 @@ the whole thing.
 packages/contracts    Pydantic contracts + stage registry. Pure Pydantic, no infra deps.
 packages/common       Settings, database, object storage, logging, the Celery app.
 packages/api-types    TypeScript types generated from the API's OpenAPI schema.
-services/api          FastAPI: auth, stories, feedback, media streaming, admin.
-services/agent        LangGraph stages, TTS, images, ffmpeg assembly, Celery workers.
+services/api          FastAPI: auth, stories, feedback, media streaming, editor, admin.
+services/agent        LangGraph stages, TTS, images, ffmpeg assembly and edits, Celery workers.
 services/music        Native macOS Stable Audio MLX sidecar (not a Docker model runtime).
 apps/web              Listener app (Vite + React), port 5173.
 apps/admin            Operator panel (Vite + React), port 5174.
@@ -143,6 +143,19 @@ makes any individual task safe to retry.
 A regeneration runs the same chain built from a shorter slice of the stage
 registry. "Make line 12 angrier" re-runs emotion tagging for that one line, its
 TTS, and assembly - three steps, not thirty.
+
+## Editing a finished episode
+
+The Editor tab makes *cuts* of an episode: a vertical version with big captions
+for Reels, a thirty-second clip of one scene with your own music under it, a
+share link anyone can watch. A cut is a manifest rather than a file, so changing
+it is a `PATCH` and previewing it costs nothing; only exporting queues a render.
+
+Cuts are recomposed from the scene artwork and the per-line audio rather than
+re-cut from `final_video`, because that file has its captions burned in and its
+narration and score already mixed together. Nothing in the editor touches
+`StoryState` or the story's status, so a failed export cannot make a healthy
+story look broken. See [the video editor guide](docs/guides/video-editor.md).
 
 ## Live progress
 
