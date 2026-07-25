@@ -25,6 +25,7 @@ export function Studio({ user, storyId, onLogout, onHome, onCompose }: Props) {
   const [busy, setBusy] = useState(false)
   const [tab, setTab] = useState<'episode' | 'scenes'>('episode')
   const [seekLineId, setSeekLineId] = useState<string | null>(null)
+  const [activeLineId, setActiveLineId] = useState<string | null>(null)
   // A respeak is only audible once assembly has rebuilt the mix, so the jump to
   // the line waits for that. These hold the request in the meantime: the line to
   // land on, and the version it was requested from, which is how a rebuilt mix is
@@ -221,6 +222,7 @@ export function Studio({ user, storyId, onLogout, onHome, onCompose }: Props) {
                   regenerating={regenerating}
                   hasMusicBed={hasMusicBed}
                   onSeekHandled={() => setSeekLineId(null)}
+                  onActiveLineChange={setActiveLineId}
                 />
                 {finalVideo ? (
                   <VideoPlayer
@@ -242,7 +244,9 @@ export function Studio({ user, storyId, onLogout, onHome, onCompose }: Props) {
                   characters={state?.characters ?? []}
                   scenes={state?.scenes ?? []}
                   busy={busy || regenerating}
+                  activeLineId={activeLineId}
                   onRegenerateLine={respeakLine}
+                  onSeekLine={setSeekLineId}
                 />
                 <FeedbackComposer
                   disabled={busy || regenerating}
