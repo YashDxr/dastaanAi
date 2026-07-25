@@ -95,6 +95,13 @@ class TestSceneScope:
         assert "scene_image:scene_01" in stale
         assert "scene_image:scene_00" not in stale
 
+    def test_story_time_machine_drops_all_future_artwork(self, state):
+        """A scene rewrite starts at story understanding, so its later scene
+        ids can now depict different events. Reusing their images would make the
+        resulting timeline visibly inconsistent."""
+        stale = _invalidated(state, Scope.SCENE, StageName.STORY_UNDERSTANDING, "scene_01")
+        assert stale >= {"scene_image:scene_00", "scene_image:scene_01"}
+
 
 class TestFullStory:
     def test_keeps_nothing(self, state):

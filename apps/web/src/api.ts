@@ -8,6 +8,7 @@ import type {
   Story,
   StoryDetail,
   User,
+  Version,
 } from './types'
 
 export { ApiError }
@@ -38,6 +39,7 @@ export const auth = {
 export const stories = {
   list: () => apiFetch<Story[]>('/stories'),
   get: (id: string) => apiFetch<StoryDetail>(`/stories/${id}`),
+  versions: (id: string) => apiFetch<Version[]>(`/stories/${id}/versions`),
   create: (raw_text: string, genre_hint?: string) =>
     apiFetch<DispatchAccepted>('/stories', {
       method: 'POST',

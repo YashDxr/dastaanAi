@@ -45,7 +45,14 @@ def invalidated_dedupe_keys(
         stale |= {ids.dedupe_key(AssetKind.LINE_AUDIO, line_id=lid) for lid in line_ids}
 
     if StageName.IMAGE_GENERATION in planned_set:
-        if scope is Scope.SCENE and target_id:
+        # A direct image retry only replaces the selected scene. A Story Time
+        # Machine rewrite enters at story understanding, however, so every later
+        # scene can change and must not inherit stale future artwork.
+        if (
+            scope is Scope.SCENE
+            and target_id
+            and StageName.STORY_UNDERSTANDING not in planned_set
+        ):
             scene_ids = [target_id]
         else:
             scene_ids = [scene.id for scene in state.scenes]

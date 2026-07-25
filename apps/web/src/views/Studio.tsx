@@ -5,8 +5,9 @@ import { FeedbackComposer } from '../components/FeedbackComposer'
 import { ProgressStepper } from '../components/ProgressStepper'
 import { ScenePanel } from '../components/ScenePanel'
 import { ScriptPanel } from '../components/ScriptPanel'
+import { StoryTimeMachine } from '../components/StoryTimeMachine'
 import { formatError, stories as storiesApi, watchProgress } from '../api'
-import type { FeedbackEntry, Progress, StoryDetail, User } from '../types'
+import type { FeedbackEntry, Progress, StoryDetail, User, Version } from '../types'
 
 type Props = {
   user: User
@@ -20,6 +21,7 @@ export function Studio({ user, storyId, onLogout, onHome, onCompose }: Props) {
   const [detail, setDetail] = useState<StoryDetail | null>(null)
   const [progress, setProgress] = useState<Progress | null>(null)
   const [feedback, setFeedback] = useState<FeedbackEntry[]>([])
+  const [versions, setVersions] = useState<Version[]>([])
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const [tab, setTab] = useState<'episode' | 'scenes'>('episode')
@@ -35,14 +37,16 @@ export function Studio({ user, storyId, onLogout, onHome, onCompose }: Props) {
 
   const refresh = useCallback(async () => {
     try {
-      const [d, p, f] = await Promise.all([
+      const [d, p, f, v] = await Promise.all([
         storiesApi.get(storyId),
         storiesApi.progress(storyId),
         storiesApi.feedbackHistory(storyId),
+        storiesApi.versions(storyId),
       ])
       setDetail(d)
       setProgress(p)
       setFeedback(f)
+      setVersions(v)
       setError(null)
       if (d.assets.some((a) => a.kind === 'final_episode')) {
         setStickyAssets(d.assets)
@@ -130,6 +134,24 @@ export function Studio({ user, storyId, onLogout, onHome, onCompose }: Props) {
       setError(formatError(err))
       respeakFromVersion.current = null
       pendingRespeakLine.current = null
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function branchFromScene(sceneId: string, instructionDelta: string) {
+    setBusy(true)
+    try {
+      await storiesApi.regenerate(storyId, {
+        scope: 'scene',
+        target_stage: 'story_understanding',
+        target_id: sceneId,
+        instruction_delta: instructionDelta,
+      })
+      await refresh()
+    } catch (err) {
+      setError(formatError(err))
+      throw err
     } finally {
       setBusy(false)
     }
@@ -224,6 +246,14 @@ export function Studio({ user, storyId, onLogout, onHome, onCompose }: Props) {
                   scenes={state?.scenes ?? []}
                   busy={busy || regenerating}
                   onRegenerateLine={respeakLine}
+                />
+                <StoryTimeMachine
+                  scenes={scenes}
+                  lines={state?.lines ?? []}
+                  versions={versions}
+                  currentVersionId={detail.version?.id}
+                  disabled={busy || regenerating || detail.story.status !== 'ready' || !detail.version}
+                  onCreateBranch={branchFromScene}
                 />
                 <FeedbackComposer
                   disabled={busy || regenerating}

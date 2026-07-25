@@ -16,6 +16,9 @@ from daastaan_agent.nodes import (
 from daastaan_contracts import (
     CharacterRole,
     LineType,
+    Scope,
+    StageName,
+    ValidatedDirective,
     VoiceGender,
 )
 
@@ -48,6 +51,62 @@ class TestStoryUnderstanding:
         assert result.scenes[1].id == "scene_01"
         assert result.arc_summary is not None
         assert result.setting is not None
+
+    def test_scene_branch_includes_the_current_timeline_for_continuity(
+        self, stub_session, state_after_mood, mock_gateway
+    ):
+        """A second alternate future must branch from the current version, not
+        silently return to the original raw text's timeline."""
+        # The fixture's canned scenes are normally installed by story
+        # understanding itself, so make the persisted branch explicit here.
+        from daastaan_contracts import Scene
+
+        state_after_mood.scenes = [
+            Scene(
+                id="scene_00",
+                index=0,
+                title="Discovery",
+                summary="Lily finds the secret door.",
+                setting="Garden wall",
+                mood_tag="mysterious",
+            ),
+            Scene(
+                id="scene_01",
+                index=1,
+                title="New Choice",
+                summary="Lily leaves the garden to seek help.",
+                setting="Village road",
+                mood_tag="urgent",
+            ),
+        ]
+        state_after_mood.regen = ValidatedDirective(
+            scope=Scope.SCENE,
+            target_stage=StageName.STORY_UNDERSTANDING,
+            target_id="scene_01",
+            instruction_delta="Lily asks the village for help instead.",
+        )
+
+        captured: dict[str, str] = {}
+        original_structured = mock_gateway.structured
+
+        def capture_request(**kwargs):
+            captured["user_content"] = kwargs["user_content"]
+            return original_structured(**kwargs)
+
+        mock_gateway.structured = capture_request
+
+        from daastaan_agent.nodes import story_understanding
+
+        story_understanding(stub_session, state_after_mood, mock_gateway)
+        request = captured["user_content"]
+
+        assert "<current_timeline>" in request
+        assert "Lily leaves the garden to seek help." in request
+        assert "Preserve every event, fact, character motivation" in request
+        assert (
+            "Additional direction from the listener: Lily asks the village for help instead."
+            in request
+        )
 
 
 class TestCharacterRegistry:

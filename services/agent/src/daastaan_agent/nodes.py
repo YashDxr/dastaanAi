@@ -63,6 +63,47 @@ def _delta(state: StoryState) -> str:
     return ""
 
 
+def _scene_rewrite_context(state: StoryState) -> str:
+    """Give a Story Time Machine rewrite a bounded snapshot of its branch.
+
+    ``raw_text`` is always the original source material, so after one alternate
+    future exists it is not enough by itself to describe the listener's current
+    continuity. Passing the persisted scene timeline back to story understanding
+    makes a second branch preserve the already-established past instead of
+    silently snapping back to the original plot. This is source material, not a
+    control channel: the normal prompt guardrail still governs it.
+    """
+    regen = state.regen
+    if (
+        regen is None
+        or regen.scope != Scope.SCENE
+        or regen.target_stage != StageName.STORY_UNDERSTANDING
+        or not regen.target_id
+    ):
+        return ""
+
+    target = state.scene_by_id(regen.target_id)
+    if target is None:
+        return ""
+
+    def clip(value: str, limit: int = 240) -> str:
+        return " ".join(value.split())[:limit]
+
+    timeline = "\n".join(
+        f"{scene.index + 1}. {clip(scene.title, 80)} — {clip(scene.summary)}"
+        for scene in sorted(state.scenes, key=lambda item: item.index)
+    )
+    return (
+        "\n\n<current_timeline>\n"
+        f"{timeline}\n"
+        "</current_timeline>\n"
+        f"The listener is branching at Scene {target.index + 1}. The timeline above is the "
+        "current version's source material. Preserve every event, fact, character motivation, "
+        f"and relationship before Scene {target.index + 1}; rewrite that scene and every later "
+        "scene into one coherent causal future."
+    )
+
+
 # --- stage 1 ---------------------------------------------------------------
 
 
@@ -90,7 +131,7 @@ def story_understanding(session: Session, state: StoryState, gw: ModelGateway) -
         user_content=(
             f"Genre and mood: {_mood_summary(state)}\n"
             f"Produce at most {limits.MAX_SCENES} scenes.\n\n"
-            f"<story>\n{state.raw_text}\n</story>{_delta(state)}"
+            f"<story>\n{state.raw_text}\n</story>{_scene_rewrite_context(state)}{_delta(state)}"
         ),
         kind="reasoning",
     )
