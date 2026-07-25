@@ -56,6 +56,8 @@ class GraphState(TypedDict, total=False):
     audio_assets: list[Any]
     image_assets: list[Any]
     final_episode_key: str | None
+    final_video_key: str | None
+    output_format: str
     regen: Any
     completed_stages: Annotated[list[StageName], operator.add]
 

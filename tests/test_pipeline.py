@@ -146,6 +146,46 @@ class TestFullPipeline:
         assert len(restored.completed_stages) == len(result.completed_stages)
 
 
+class TestOutputFormatFlow:
+    def test_output_format_flows_through_state(
+        self, in_memory_session, mock_gateway
+    ):
+        """output_format should survive a LangGraph round-trip."""
+        from tests.conftest import _base_state
+
+        state = _base_state(output_format="video")
+        assert state.output_format == "video"
+
+        with (
+            patch(
+                "daastaan_agent.graph.ModelGateway",
+                return_value=mock_gateway,
+            ),
+            patch("daastaan_agent.graph.repo") as mock_repo,
+        ):
+            mock_repo.start_job.return_value = _mock_job(state.story_id)
+            mock_repo.finish_job.return_value = None
+            mock_repo.save_state.return_value = None
+
+            result = run_agent_stages(
+                in_memory_session, state, "test-user"
+            )
+
+        assert result.output_format == "video"
+
+    def test_output_format_defaults_to_audio(self):
+        """Without explicit output_format, state defaults to 'audio'."""
+        state = StoryState(
+            story_id="s1", version_id="v1", user_id="u1",
+            raw_text="x" * 30,
+        )
+        assert state.output_format == "audio"
+
+        dumped = state.model_dump(mode="json")
+        restored = StoryState.model_validate(dumped)
+        assert restored.output_format == "audio"
+
+
 class TestGraphErrorHandling:
     def test_node_failure_propagates(
         self, in_memory_session, sample_state, mock_gateway

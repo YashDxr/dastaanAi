@@ -39,6 +39,13 @@ class Clip:
     pause_after_ms: int = 0
 
 
+@dataclass(frozen=True)
+class SceneFrame:
+    image: bytes
+    duration_ms: int
+    scene_id: str
+
+
 def ffmpeg_path() -> str:
     """Absolute path to ffmpeg.
 
@@ -145,4 +152,92 @@ def compose_episode(clips: list[Clip], music_bed: bytes | None = None) -> bytes:
             raise AssemblyError(f"ffmpeg exited {result.returncode}: {result.stderr[-500:]}")
 
         log.info("episode_assembled", clips=len(clips), music=bool(music_bed))
+        return output.read_bytes()
+
+
+def build_scene_timeline(
+    lines: list, audio_assets: dict,
+) -> dict[str, tuple[int, int]]:
+    """Calculate per-scene start/end timestamps from line audio durations.
+
+    ``lines`` are the story's ``DialogueLine`` objects.  ``audio_assets`` maps
+    ``line_id`` to an object with ``duration_ms`` (typically a ``MediaAsset``).
+
+    Returns ``{scene_id: (start_ms, end_ms)}``.
+    """
+    from collections import defaultdict
+
+    scenes: dict[str, list] = defaultdict(list)
+    for line in lines:
+        scenes[line.scene_id].append(line)
+
+    timeline: dict[str, tuple[int, int]] = {}
+    cursor_ms = 0
+    for scene_id in sorted(scenes, key=lambda sid: min(l.index for l in scenes[sid])):
+        scene_lines = sorted(scenes[scene_id], key=lambda l: l.index)
+        scene_start = cursor_ms
+        for line in scene_lines:
+            asset = audio_assets.get(line.id)
+            duration = asset.duration_ms if asset and asset.duration_ms else 0
+            cursor_ms += duration + (line.pause_after_ms or 0)
+        timeline[scene_id] = (scene_start, cursor_ms)
+
+    return timeline
+
+
+def compose_video(audio: bytes, scene_frames: list[SceneFrame]) -> bytes:
+    """Combine a final audio track with scene images into an MP4 video.
+
+    Uses the same safety pattern as ``compose_episode``: temp directory, argv
+    list, no ``shell=True``, no model output in paths.
+    """
+    if not scene_frames:
+        raise AssemblyError("cannot compose video with no scene frames")
+
+    with tempfile.TemporaryDirectory(prefix="daastaan-vid-") as tmp:
+        workdir = Path(tmp)
+
+        # Write audio
+        audio_path = workdir / "audio.mp3"
+        audio_path.write_bytes(audio)
+
+        # Write images and build concat demuxer file
+        concat_lines: list[str] = []
+        for idx, frame in enumerate(scene_frames):
+            img_path = workdir / f"frame_{idx:04d}.png"
+            img_path.write_bytes(frame.image)
+            duration_s = max(frame.duration_ms, 1) / 1000
+            concat_lines.append(f"file '{img_path.name}'")
+            concat_lines.append(f"duration {duration_s:.3f}")
+
+        # ffmpeg concat demuxer needs the last file repeated without duration
+        if concat_lines:
+            last_file_line = concat_lines[-2]  # the last 'file' line
+            concat_lines.append(last_file_line)
+
+        concat_path = workdir / "concat.txt"
+        concat_path.write_text("\n".join(concat_lines))
+
+        output = workdir / "video.mp4"
+        vf = (
+            "scale=1280:720:force_original_aspect_ratio=decrease,"
+            "pad=1280:720:(ow-iw)/2:(oh-ih)/2"
+        )
+        command = [
+            ffmpeg_path(), "-hide_banner", "-loglevel", "error", "-y",
+            "-f", "concat", "-safe", "0", "-i", str(concat_path),
+            "-i", str(audio_path),
+            "-vf", vf,
+            "-c:v", "libx264", "-pix_fmt", "yuv420p",
+            "-c:a", "aac",
+            "-shortest",
+            str(output),
+        ]
+
+        result = subprocess.run(command, capture_output=True, text=True, timeout=600)  # noqa: S603
+        if result.returncode != 0:
+            log.error("ffmpeg_video_failed", stderr=result.stderr[-2000:])
+            raise AssemblyError(f"ffmpeg exited {result.returncode}: {result.stderr[-500:]}")
+
+        log.info("video_composed", frames=len(scene_frames))
         return output.read_bytes()

@@ -35,7 +35,7 @@ from daastaan_contracts import (
 from sqlmodel import select
 
 from . import prompts, repo
-from .assembly import Clip, compose_episode
+from .assembly import AssemblyError, Clip, SceneFrame, build_scene_timeline, compose_episode, compose_video
 from .gateway import PERMANENT_FAILURES, ModelGateway, ModerationBlocked
 from .graph import run_agent_stages
 from .nodes import STAGE_NODES
@@ -340,6 +340,109 @@ def assemble(self, version_id: str, user_id: str) -> str:  # type: ignore[no-unt
             state.final_episode_key = key
             repo.save_state(session, state)
             repo.finish_job(session, job, status=JobStatus.SUCCEEDED)
+
+            if state.output_format in ("video", "both"):
+                compose_video_task.si(version_id, user_id).apply_async(
+                    queue=Queue.ASSEMBLY.value
+                )
+            else:
+                _mark_story(session, state.story_id, StoryStatus.READY)
+                repo.publish(state.story_id, {"type": "complete", "version_id": version_id})
+        except Exception as exc:
+            repo.finish_job(session, job, status=JobStatus.FAILED, error=str(exc))
+            _mark_story(session, state.story_id, StoryStatus.FAILED)
+            raise
+    return version_id
+
+
+@celery_app.task(name=TaskName.COMPOSE_VIDEO.value, bind=True, **RETRY_KWARGS)
+def compose_video_task(self, version_id: str, user_id: str) -> str:  # type: ignore[no-untyped-def]
+    """Compose scene images and the final audio into an MP4 video."""
+    init_tracing()
+    with session_scope() as session:
+        state = repo.load_state(session, version_id)
+        job = repo.start_job(
+            session, story_id=state.story_id, version_id=version_id,
+            stage=StageName.VIDEO_COMPOSITION,
+        )
+        try:
+            if state.output_format not in ("video", "both"):
+                repo.finish_job(session, job, status=JobStatus.SKIPPED)
+                _mark_story(session, state.story_id, StoryStatus.READY)
+                repo.publish(state.story_id, {"type": "complete", "version_id": version_id})
+                return version_id
+
+            # Load audio assets for timeline calculation
+            audio_assets = {
+                asset.line_id: asset
+                for asset in session.exec(
+                    select(MediaAsset).where(
+                        MediaAsset.version_id == version_id,
+                        MediaAsset.kind == AssetKind.LINE_AUDIO.value,
+                    )
+                ).all()
+            }
+
+            # Load scene image assets
+            image_assets = {
+                asset.scene_id: asset
+                for asset in session.exec(
+                    select(MediaAsset).where(
+                        MediaAsset.version_id == version_id,
+                        MediaAsset.kind == AssetKind.SCENE_IMAGE.value,
+                    )
+                ).all()
+            }
+
+            # Load the final episode audio
+            if not state.final_episode_key:
+                raise AssemblyError("no final episode audio available for video composition")
+            store = get_store()
+            episode_audio = store.get(state.final_episode_key)
+
+            # Build scene timeline
+            timeline = build_scene_timeline(state.lines, audio_assets)
+
+            # Build SceneFrame list, skipping scenes without images
+            scene_frames: list[SceneFrame] = []
+            for scene in sorted(state.scenes, key=lambda s: s.index):
+                if scene.id not in image_assets or not image_assets[scene.id].object_key:
+                    log.warning("video_missing_scene_image", scene_id=scene.id)
+                    continue
+                if scene.id not in timeline:
+                    log.warning("video_missing_scene_timeline", scene_id=scene.id)
+                    continue
+                start_ms, end_ms = timeline[scene.id]
+                duration_ms = end_ms - start_ms
+                if duration_ms <= 0:
+                    continue
+                image_bytes = store.get(image_assets[scene.id].object_key)
+                scene_frames.append(SceneFrame(
+                    image=image_bytes,
+                    duration_ms=duration_ms,
+                    scene_id=scene.id,
+                ))
+
+            if not scene_frames:
+                raise AssemblyError("no scene frames available for video composition")
+
+            video = compose_video(episode_audio, scene_frames)
+
+            key = ids.object_key(version_id, AssetKind.FINAL_VIDEO, ext="mp4")
+            store.put(key, video, "video/mp4")
+
+            repo.record_asset(
+                session,
+                version_id=version_id,
+                kind=AssetKind.FINAL_VIDEO,
+                dedupe_key=ids.dedupe_key(AssetKind.FINAL_VIDEO),
+                object_key=key,
+                content_type="video/mp4",
+                size_bytes=len(video),
+            )
+            state.final_video_key = key
+            repo.save_state(session, state)
+            repo.finish_job(session, job, status=JobStatus.SUCCEEDED)
             _mark_story(session, state.story_id, StoryStatus.READY)
             repo.publish(state.story_id, {"type": "complete", "version_id": version_id})
         except Exception as exc:
@@ -361,6 +464,9 @@ def fan_out(self, version_id: str, user_id: str, include_images: bool = True) ->
     """
     with session_scope() as session:
         state = repo.load_state(session, version_id)
+
+    if state.output_format in ("video", "both"):
+        include_images = True
 
     jobs = [tts_line.si(version_id, line.id, user_id) for line in state.lines]
     if include_images:
