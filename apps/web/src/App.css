@@ -921,6 +921,68 @@
   font-size: 0.86rem;
 }
 
+/* Live model output ----------------------------------------------------- */
+
+/* The running count on a fan-out chip. Tabular figures so the chip does not
+   twitch sideways as the numbers tick past nine and ninety-nine. */
+.stage-count {
+  margin-left: 0.1rem;
+  font-size: 0.72rem;
+  font-variant-numeric: tabular-nums;
+  opacity: 0.8;
+}
+
+.stage-preview {
+  margin-top: 0.6rem;
+  padding: 0.7rem 0.85rem;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+  background: color-mix(in srgb, var(--amber) 5%, transparent);
+}
+
+.stage-preview ul {
+  margin: 0.4rem 0 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+
+.stage-preview li {
+  font-size: 0.85rem;
+  line-height: 1.45;
+  color: var(--ink-soft);
+  /* One line each: these are model-written strings of unpredictable length, and
+     letting them wrap made the panel jump every time one arrived. */
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  animation: preview-in 0.25s ease-out;
+}
+
+/* The newest item is the one worth reading, so it is the one that is legible. */
+.stage-preview li:last-child {
+  color: var(--ink);
+}
+
+@keyframes preview-in {
+  from {
+    opacity: 0;
+    transform: translateY(0.25rem);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .stage-preview li {
+    animation: none;
+  }
+}
+
 .player.empty {
   min-height: 8rem;
 }

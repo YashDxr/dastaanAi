@@ -5,7 +5,6 @@ the frontends. Deliberately depends only on Pydantic so that adding it to a
 service never drags in a database driver or an LLM SDK.
 """
 
-from .languages import language_name
 from .enums import (
     AssetKind,
     CharacterRole,
@@ -20,6 +19,20 @@ from .enums import (
     VoiceAge,
     VoiceGender,
 )
+from .events import (
+    AssetEvent,
+    CompleteEvent,
+    FeedbackEvent,
+    HeartbeatEvent,
+    MusicStatusEvent,
+    ProgressEvent,
+    StageEvent,
+    StagePreviewEvent,
+    StageProgressEvent,
+    StageTokensEvent,
+    progress_event_adapter,
+)
+from .languages import language_name
 from .models import (
     Character,
     CharacterRegistryOutput,
@@ -48,7 +61,7 @@ from .stages import (
     stage_index,
 )
 from .state import StoryState
-from .tasks import STAGE_QUEUE, Queue, TaskName, progress_channel
+from .tasks import STAGE_QUEUE, Queue, TaskName
 
 __all__ = [
     "AGENT_STAGES",
@@ -56,26 +69,36 @@ __all__ = [
     "FANOUT_STAGES",
     "PIPELINE_STAGES",
     "STAGE_QUEUE",
+    "AssetEvent",
     "AssetKind",
     "Character",
     "CharacterRegistryOutput",
     "CharacterRole",
+    "CompleteEvent",
     "DialogueLine",
     "DialogueScriptOutput",
     "EmotionTaggingOutput",
+    "FeedbackEvent",
     "FeedbackStatus",
+    "HeartbeatEvent",
     "IngestStatus",
     "JobStatus",
     "LineType",
     "MediaAsset",
     "MoodClassificationOutput",
+    "MusicStatusEvent",
     "NarratorPersona",
     "NarratorPersonaOutput",
+    "ProgressEvent",
     "Queue",
     "RegenDirective",
     "Scene",
     "Scope",
+    "StageEvent",
     "StageName",
+    "StagePreviewEvent",
+    "StageProgressEvent",
+    "StageTokensEvent",
     "StoryCleanupOutput",
     "StoryState",
     "StoryStatus",
@@ -90,6 +113,6 @@ __all__ = [
     "is_fanout",
     "is_valid_entry",
     "plan_stages",
-    "progress_channel",
+    "progress_event_adapter",
     "stage_index",
 ]

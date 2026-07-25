@@ -6,6 +6,7 @@ session cookie same-origin and avoids CORS entirely in the common case.
 """
 
 from contextlib import asynccontextmanager
+from typing import Any
 
 import structlog
 from daastaan_common import configure_logging, get_settings, init_db
@@ -13,6 +14,7 @@ from daastaan_common.middleware import RequestIdMiddleware
 from daastaan_common.request_id import REQUEST_ID_HEADER, current_request_id
 from fastapi import FastAPI, Request, status
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.openapi.utils import get_openapi
 from fastapi.responses import JSONResponse
 
 from .routers import (
@@ -88,3 +90,34 @@ for router in (health.router, auth.router, stories.router, feedback.router, medi
 
 # WebSocket paths are not prefixed: the route already carries its own /ws prefix.
 app.include_router(progress.router)
+
+
+def custom_openapi() -> dict[str, Any]:
+    """The generated document, plus the schemas FastAPI cannot infer.
+
+    The progress event union is delivered as a stream of SSE frames rather than a
+    response body, so no `response_model` describes it and it would otherwise be
+    absent from the document - leaving the two React apps to hand-maintain a copy of
+    every event shape. Merging it in here keeps Pydantic the single source of truth
+    for the event contract as well as for requests and responses.
+
+    Existing entries win, because the event models reference enums FastAPI has
+    already published from other routes and those definitions are the same ones.
+    """
+    if app.openapi_schema:
+        return app.openapi_schema
+
+    schema = get_openapi(
+        title=app.title,
+        version=app.version,
+        routes=app.routes,
+    )
+    components = schema.setdefault("components", {}).setdefault("schemas", {})
+    for name, definition in progress.event_component_schemas().items():
+        components.setdefault(name, definition)
+
+    app.openapi_schema = schema
+    return schema
+
+
+app.openapi = custom_openapi  # type: ignore[method-assign]
