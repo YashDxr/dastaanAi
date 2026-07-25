@@ -7,6 +7,7 @@ import {
   type Job,
   type Progress,
 } from '../types'
+import { StreamingActivity } from './StreamingActivity'
 
 type Props = {
   progress: Progress | null
@@ -16,21 +17,10 @@ type Props = {
   interpreting?: boolean
 }
 
-/** What the fan-out stages are counting, so "12 of 40" says what it is counting. */
-const COUNT_NOUNS: Record<string, [string, string]> = {
-  tts_synthesis: ['line recorded', 'lines recorded'],
-  image_generation: ['scene painted', 'scenes painted'],
-}
-
 function statusFor(jobs: Job[], stage: string): string {
   const matches = jobs.filter((j) => j.stage === stage)
   if (!matches.length) return 'pending'
   return matches[matches.length - 1].status
-}
-
-function countLabel(stage: string, completed: number, total: number): string {
-  const [singular, plural] = COUNT_NOUNS[stage] ?? ['step done', 'steps done']
-  return `${completed} of ${total} ${total === 1 ? singular : plural}`
 }
 
 export function ProgressStepper({ progress, live = emptyLive, interpreting = false }: Props) {
@@ -53,9 +43,9 @@ export function ProgressStepper({ progress, live = emptyLive, interpreting = fal
     return ready && status === 'pending' ? 'succeeded' : status
   }
 
-  // Counts come from the stream while it is up and from `/jobs` when it is not, so
-  // the fan-out stays quantified either way. Folded with `max` for the same reason
-  // the reducer does it: concurrent workers report out of order.
+  // Counts come from the stream while it is up and from `/jobs` when it is not,
+  // so the fan-out stays quantified either way. Folded with `max` for the same
+  // reason the reducer does it: concurrent workers report out of order.
   const counts: LiveProgress['counts'] = { ...live.counts }
   for (const entry of progress?.stage_progress ?? []) {
     const current = counts[entry.stage]
@@ -78,6 +68,10 @@ export function ProgressStepper({ progress, live = emptyLive, interpreting = fal
   const preview = runningStage ? live.previews[runningStage] : undefined
   const tokens = runningStage ? live.tokens[runningStage] : undefined
 
+  // Show the streaming card while a stage is active or while a feedback note is
+  // being interpreted (before the stage row appears).
+  const streaming = runningStage !== null || interpreting
+
   return (
     <section className="progress-panel" aria-label="Generation progress">
       <div className="progress-top">
@@ -95,6 +89,8 @@ export function ProgressStepper({ progress, live = emptyLive, interpreting = fal
           {pct}%
         </p>
       </div>
+
+      {/* Smooth progress bar */}
       <div
         className="progress-meter"
         role="progressbar"
@@ -104,14 +100,16 @@ export function ProgressStepper({ progress, live = emptyLive, interpreting = fal
       >
         <div className="progress-fill" style={{ width: `${pct}%` }} />
       </div>
+
+      {/* Stage chips rail */}
       <ol className="stage-rail">
         {stages.map((stage, i) => {
           const description = STAGE_DESCRIPTIONS[stage]
           const count = counts[stage]
           return (
             <li key={stage} className={`stage-chip ${statuses[i]}`}>
-              {/* A button, not a div with a title: hover explains it to a mouse
-                  user and focus explains it to everyone else. */}
+              {/* A button rather than a div: hover explains it to a mouse user
+                  and focus explains it to keyboard and AT users. */}
               <button
                 type="button"
                 className="stage-trigger"
@@ -119,8 +117,7 @@ export function ProgressStepper({ progress, live = emptyLive, interpreting = fal
               >
                 <span className="stage-dot" aria-hidden />
                 <span className="stage-label">{STAGE_LABELS[stage] ?? stage}</span>
-                {/* Only while the stage is in flight: once it has finished the
-                    fraction is always n of n, which is just noise on the rail. */}
+                {/* Count badge only while in flight. Finished means n/n which is noise. */}
                 {statuses[i] === 'running' && count && count.total > 1 && (
                   <span className="stage-count">
                     {count.completed}/{count.total}
@@ -138,59 +135,30 @@ export function ProgressStepper({ progress, live = emptyLive, interpreting = fal
         })}
       </ol>
 
-      <div className="stage-explainer" aria-live="polite">
-        {interpreting ? (
-          <p>
-            <strong>Reading your note.</strong> Working out the smallest change that
-            satisfies it before any audio is re-recorded.
-          </p>
-        ) : runningStage ? (
-          <p>
-            <strong>{STAGE_LABELS[runningStage] ?? runningStage}.</strong>{' '}
-            {runningCount && runningCount.total > 0
-              ? countLabel(runningStage, runningCount.completed, runningCount.total)
-              : (STAGE_DESCRIPTIONS[runningStage] ?? 'Working on this stage.')}
-          </p>
-        ) : ready ? (
-          <p className="muted">
-            Every stage finished. Hover any step above to see what it did.
-          </p>
-        ) : (
-          <p className="muted">
-            {partial
-              ? 'Queued. Only the steps above will re-run.'
-              : 'Queued. Hover any step above to see what it will do.'}
-          </p>
-        )}
-      </div>
-
-      {/* What the model is writing, as it writes it. Newest last, matching the
-          order it was generated, and capped so a long script does not push the
-          rest of the studio off screen. */}
-      {preview && preview.items.length > 0 && (
-        <section className="stage-preview" aria-label={preview.label}>
-          <p className="eyebrow">{preview.label}</p>
-          <ul>
-            {preview.items.slice(-6).map((item, i) => (
-              // Indexed key: these are model-written strings with no id, and two
-              // lines of dialogue can legitimately be identical.
-              <li key={`${item}-${i}`}>{item}</li>
-            ))}
-          </ul>
-        </section>
-      )}
-      {/* A stage with no preview worth showing still needs to look alive, and this
-          is the only honest signal available mid-call. */}
-      {!preview && tokens !== undefined && tokens > 0 && (
-        <p className="progress-note" aria-live="polite">
-          Writing… {tokens} tokens so far.
+      {/* ── Live streaming card ──────────────────────────────────────────── */}
+      {streaming ? (
+        <StreamingActivity
+          stage={runningStage}
+          label={preview?.label}
+          items={preview?.items}
+          tokens={tokens}
+          count={runningCount}
+          interpreting={interpreting && !runningStage}
+        />
+      ) : ready ? (
+        <p className="progress-note muted">
+          Every stage finished. Hover any step above to see what it did.
+        </p>
+      ) : (
+        <p className="progress-note muted">
+          {partial
+            ? 'Queued. Only the steps above will re-run.'
+            : 'Queued. Hover any step above to see what it will do.'}
         </p>
       )}
 
       {partial && (
-        <p className="progress-note">
-          Everything else is carried over from the previous take.
-        </p>
+        <p className="progress-note">Everything else is carried over from the previous take.</p>
       )}
       {failed && (
         <p className="progress-error">
@@ -198,7 +166,7 @@ export function ProgressStepper({ progress, live = emptyLive, interpreting = fal
         </p>
       )}
       {unavailableMusic && <p className="progress-note">{unavailableMusic.error}</p>}
-      {/* Degradations the stream reported that no job row carries yet. */}
+      {/* Degradations reported through the stream that no job row carries yet. */}
       {!unavailableMusic &&
         live.notices.map((notice) => (
           <p className="progress-note" key={notice}>
