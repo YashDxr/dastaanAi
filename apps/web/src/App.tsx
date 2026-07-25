@@ -1,103 +1,114 @@
-import { apiFetch, ApiError } from '@daastaan/api-types'
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
+import { auth, formatError, stories as storiesApi } from './api'
+import { Landing } from './views/Landing'
+import { Library } from './views/Library'
+import { Compose } from './views/Compose'
+import { Studio } from './views/Studio'
+import type { Story, User, View } from './types'
 import './App.css'
 
-type User = { id: string; email: string; role: string }
-type Story = { id: string; title: string | null; status: string; current_version_id: string | null }
-
-/**
- * Starting shell for the listener-facing app.
- *
- * Deliberately minimal: it proves the auth cookie round-trip and the story list
- * work end to end, which is the piece that is annoying to debug later. The
- * studio view, progress stepper, and player build on top of this.
- */
 export default function App() {
   const [user, setUser] = useState<User | null>(null)
   const [stories, setStories] = useState<Story[]>([])
-  const [error, setError] = useState<string | null>(null)
-  const [loading, setLoading] = useState(true)
+  const [view, setView] = useState<View>({ name: 'landing' })
+  const [boot, setBoot] = useState(true)
+  const [bootError, setBootError] = useState<string | null>(null)
 
-  useEffect(() => {
-    apiFetch<User>('/auth/me')
-      .then(setUser)
-      .catch(() => setUser(null))
-      .finally(() => setLoading(false))
+  const loadLibrary = useCallback(async () => {
+    const list = await storiesApi.list()
+    setStories(list)
   }, [])
 
-  useEffect(() => {
-    if (!user) return
-    apiFetch<Story[]>('/stories')
-      .then(setStories)
-      .catch((err: ApiError) => setError(err.detail))
-  }, [user])
-
-  async function handleAuth(event: React.FormEvent<HTMLFormElement>, path: '/auth/login' | '/auth/signup') {
-    event.preventDefault()
-    setError(null)
-    const form = new FormData(event.currentTarget)
+  const bootstrap = useCallback(async () => {
+    setBoot(true)
+    setBootError(null)
     try {
-      const me = await apiFetch<User>(path, {
-        method: 'POST',
-        body: JSON.stringify({ email: form.get('email'), password: form.get('password') }),
-      })
+      const me = await auth.me()
       setUser(me)
-    } catch (err) {
-      setError(err instanceof ApiError ? err.detail : 'something went wrong')
+      await loadLibrary()
+      setView({ name: 'library' })
+    } catch {
+      setUser(null)
+      setView({ name: 'landing' })
+    } finally {
+      setBoot(false)
+    }
+  }, [loadLibrary])
+
+  useEffect(() => {
+    void bootstrap()
+  }, [bootstrap])
+
+  async function handleLogout() {
+    try {
+      await auth.logout()
+    } finally {
+      setUser(null)
+      setStories([])
+      setView({ name: 'landing' })
     }
   }
 
-  if (loading) return <main className="shell">Loading…</main>
-
-  if (!user) {
+  if (boot) {
     return (
-      <main className="shell">
-        <h1>Daastaan</h1>
-        <p className="tagline">Turn a dream into an audio drama.</p>
-        <form onSubmit={(e) => handleAuth(e, '/auth/login')}>
-          <input name="email" type="email" placeholder="you@example.com" required />
-          <input name="password" type="password" placeholder="password" minLength={8} required />
-          <div className="row">
-            <button type="submit">Log in</button>
-            <button type="button" onClick={(e) => handleAuth(e as never, '/auth/signup')}>
-              Sign up
-            </button>
-          </div>
-        </form>
-        {error && <p className="error">{error}</p>}
-      </main>
+      <div className="app-frame">
+        <main className="library">
+          <p className="brand-word">Daastaan</p>
+          <p className="muted">Opening the studio…</p>
+        </main>
+      </div>
+    )
+  }
+
+  if (!user || view.name === 'landing') {
+    return (
+      <Landing
+        onAuthed={() => {
+          void bootstrap().catch((err) => setBootError(formatError(err)))
+        }}
+      />
+    )
+  }
+
+  if (view.name === 'compose') {
+    return (
+      <Compose
+        user={user}
+        onLogout={() => void handleLogout()}
+        onHome={() => setView({ name: 'library' })}
+        onCreated={(storyId) => {
+          void loadLibrary()
+          setView({ name: 'studio', storyId })
+        }}
+      />
+    )
+  }
+
+  if (view.name === 'studio') {
+    return (
+      <Studio
+        user={user}
+        storyId={view.storyId}
+        onLogout={() => void handleLogout()}
+        onHome={() => {
+          void loadLibrary()
+          setView({ name: 'library' })
+        }}
+        onCompose={() => setView({ name: 'compose' })}
+      />
     )
   }
 
   return (
-    <main className="shell">
-      <header className="row">
-        <h1>Daastaan</h1>
-        <button
-          onClick={async () => {
-            await apiFetch('/auth/logout', { method: 'POST' })
-            setUser(null)
-          }}
-        >
-          Log out
-        </button>
-      </header>
-      <p className="tagline">Signed in as {user.email}</p>
-
-      <h2>Your stories</h2>
-      {stories.length === 0 ? (
-        <p>No stories yet. Paste a dream to get started.</p>
-      ) : (
-        <ul className="stories">
-          {stories.map((story) => (
-            <li key={story.id}>
-              <strong>{story.title ?? 'Untitled'}</strong>
-              <span className={`badge ${story.status}`}>{story.status}</span>
-            </li>
-          ))}
-        </ul>
-      )}
-      {error && <p className="error">{error}</p>}
-    </main>
+    <>
+      {bootError && <p className="form-error">{bootError}</p>}
+      <Library
+        user={user}
+        stories={stories}
+        onLogout={() => void handleLogout()}
+        onCompose={() => setView({ name: 'compose' })}
+        onOpen={(storyId) => setView({ name: 'studio', storyId })}
+      />
+    </>
   )
 }

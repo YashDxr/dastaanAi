@@ -9,6 +9,8 @@ from contextlib import asynccontextmanager
 
 import structlog
 from daastaan_common import configure_logging, get_settings, init_db
+from daastaan_common.middleware import RequestIdMiddleware
+from daastaan_common.request_id import REQUEST_ID_HEADER, current_request_id
 from fastapi import FastAPI, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -22,7 +24,7 @@ log = structlog.get_logger(__name__)
 async def lifespan(app: FastAPI):  # type: ignore[no-untyped-def]
     configure_logging("api")
     init_db()
-    log.info("api_started", env=get_settings().app_env)
+    log.info("api_started", env=get_settings().app_env, postgres_mode=get_settings().postgres_mode)
     yield
 
 
@@ -35,22 +37,29 @@ app = FastAPI(
 )
 
 settings = get_settings()
+# Request-id outermost so CORS and handlers all see the bound context.
+app.add_middleware(RequestIdMiddleware)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origins,
     allow_credentials=True,
     allow_methods=["*"],
-    allow_headers=["*"],
+    allow_headers=["*", REQUEST_ID_HEADER],
+    # A media element only treats a response as seekable when it can read the
+    # range headers back, which cross-origin it cannot unless they are exposed.
+    expose_headers=[REQUEST_ID_HEADER, "Accept-Ranges", "Content-Range", "Content-Length"],
 )
 
 
 @app.exception_handler(Exception)
 async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONResponse:
     """Never leak a stack trace to a client. The detail goes to the logs."""
-    log.exception("unhandled_error", path=request.url.path)
+    request_id = getattr(request.state, "request_id", None) or current_request_id()
+    log.exception("unhandled_error", path=request.url.path, request_id=request_id)
     return JSONResponse(
         status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-        content={"detail": "internal server error"},
+        content={"detail": "internal server error", "request_id": request_id},
+        headers={REQUEST_ID_HEADER: request_id} if request_id else {},
     )
 
 

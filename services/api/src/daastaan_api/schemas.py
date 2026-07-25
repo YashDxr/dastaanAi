@@ -90,6 +90,10 @@ class ProgressOut(BaseModel):
     story_id: str
     version_id: str | None
     status: str
+    # The stages this particular run covers. A full generation lists all of them;
+    # a scoped regeneration lists only the slice it re-executes, so the client can
+    # show completion against the right denominator.
+    planned_stages: list[str]
     jobs: list[JobOut]
 
 

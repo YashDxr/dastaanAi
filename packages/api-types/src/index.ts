@@ -58,7 +58,15 @@ export async function apiFetch<T>(path: string, init: RequestInit = {}): Promise
   if (!response.ok) {
     let detail = response.statusText
     try {
-      detail = (await response.json())?.detail ?? detail
+      const body = await response.json()
+      const raw = body?.detail
+      if (typeof raw === 'string') detail = raw
+      else if (Array.isArray(raw)) {
+        detail = raw
+          .map((item: { msg?: string }) => item?.msg)
+          .filter(Boolean)
+          .join('. ') || response.statusText
+      }
     } catch {
       // Non-JSON error body; the status text is the best we have.
     }
