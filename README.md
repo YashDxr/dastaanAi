@@ -106,11 +106,23 @@ make worker         # one worker across all queues
 ### Local background music (Apple Silicon)
 
 The BGM model stays in a native macOS sidecar so its MLX runtime can access
-Metal; Docker workers call it over a signed private HTTP API. Start with
-`MUSIC_ENABLED=false`, then follow [the local music sidecar guide](docs/guides/local-music-sidecar.md).
-The feature flag and URL live in `.env`; copy `.env.music.example` to the
-gitignored `.env.music` for the credentials that Compose injects into
-`worker-music` only.
+Metal; Docker workers call it over a signed private HTTP API.
+
+**If you are the music Mac owner** — start the sidecar with `make music-service`
+(already configured with Tailscale Serve on
+`https://subramanyas-macbook-air.tail70ba05.ts.net`).
+
+**If you are a teammate** running the Docker stack on a different Mac — join the
+same Tailscale account, then set in your `.env`:
+
+```dotenv
+MUSIC_ENABLED=true
+MUSIC_SERVICE_BASE_URL=https://subramanyas-macbook-air.tail70ba05.ts.net
+```
+
+Get the credential values (`MUSIC_SERVICE_TOKEN`, `MUSIC_SERVICE_HMAC_SECRET`)
+from the music Mac owner and put them in your `.env.music`. Full steps in
+[the local music sidecar guide](docs/guides/local-music-sidecar.md) § 4.
 
 ## How a generation flows
 
@@ -138,10 +150,41 @@ and re-enters at `story_understanding`, so every later scene, line, asset, and
 mix stays consistent with the new decision while the parent version remains
 unchanged.
 
-Progress reaches the browser over SSE (`GET /api/stories/{id}/events`) fed by
-Redis pub/sub, with `GET /api/stories/{id}/jobs` as the polling fallback while
-the stream is down. The WebSocket at `/ws/stories/{id}` is still served for
-non-browser clients.
+## Live progress
+
+Progress reaches the browser over SSE (`GET /api/stories/{id}/events`), fed by a
+capped Redis stream per story (`daastaan:events:{story_id}`). Each frame carries
+its stream id, so `EventSource` replays it in `Last-Event-ID` on reconnect and the
+API resumes from exactly where that client left off - a dropped connection is a
+pause rather than a hole. A client with no such header is sent the whole retained
+log, which is how a page reload mid-run rebuilds what has happened so far.
+
+Events are typed in `daastaan_contracts.events` as a discriminated union, and the
+API publishes that union into its OpenAPI document, so `npm run gen:types` gives
+the frontend real event types rather than `unknown`. Adding an event kind means
+adding a model there; clients ignore types they do not recognise.
+
+What gets reported:
+
+| Event | Carries |
+| --- | --- |
+| `stage` | A stage changed status. Mirrors the `jobs` table. |
+| `stage_progress` | "n of m" for the fan-out stages, so a 40-line TTS run visibly moves. |
+| `stage_preview` | Characters, scene titles and script lines *as the model writes them*. |
+| `stage_tokens` | Output-token count for stages with nothing display-worthy to show. |
+| `asset` / `music_status` / `feedback` / `complete` | Media landed, score degraded, note applied, episode ready. |
+
+Previews come from streaming the structured-output call: `ModelGateway.structured`
+streams every completion and reports the partially-parsed object to an `on_delta`
+callback, throttled so a long stage is a handful of publishes rather than one per
+token. `stream_options={"include_usage": True}` is passed for a reason - without it
+a streamed call reports no usage and every reasoning row in the ledger would become
+an estimate.
+
+`GET /api/stories/{id}/jobs` is the polling fallback while the stream is down, and
+it recomputes the same fan-out counts from `media_assets` so the detail survives a
+Redis flush. The WebSocket at `/ws/stories/{id}` reads the same stream and is still
+served for non-browser clients; it accepts `?last_event_id=` in place of the header.
 
 ## Response cache
 

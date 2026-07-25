@@ -42,6 +42,12 @@ export type Job = {
   finished_at: string | null
 }
 
+export type StageProgress = {
+  stage: string
+  completed: number
+  total: number
+}
+
 export type Progress = {
   story_id: string
   version_id: string | null
@@ -49,6 +55,10 @@ export type Progress = {
   /** Stages this run covers — a scoped regeneration only lists its own slice. */
   planned_stages?: string[]
   jobs: Job[]
+  /** Per-line and per-scene completion for the fan-out stages, recomputed from
+   *  stored assets. The live stream reports the same figures; this is what keeps the
+   *  fan-out detailed when the stream is unavailable. */
+  stage_progress?: StageProgress[]
 }
 
 export type RegenDirective = {
@@ -211,7 +221,9 @@ export type StoryState = {
     style_notes: string
     delivery_template: string
   } | null
+  output_format?: string
   final_episode_key?: string | null
+  final_video_key?: string | null
 }
 
 export type View =
@@ -232,6 +244,7 @@ export const STAGE_LABELS: Record<string, string> = {
   image_generation: 'Imagery',
   music_generation: 'Score',
   assembly: 'Mix',
+  video_composition: 'Video',
 }
 
 /** What each stage actually does, written for a listener rather than an engineer. */
@@ -257,6 +270,8 @@ export const STAGE_DESCRIPTIONS: Record<string, string> = {
     'Writes one subtle instrumental bed beneath the narration. If the private music Mac is offline, the episode still finishes without it.',
   assembly:
     'Stitches the recorded lines together with pacing and pauses into the final episode.',
+  video_composition:
+    'Combines scene artwork with the audio mix into a finished video.',
 }
 
 export const PIPELINE_ORDER = Object.keys(STAGE_LABELS)

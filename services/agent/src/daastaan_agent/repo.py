@@ -6,35 +6,24 @@ and any task can be retried in isolation because it reads current state instead 
 whatever was true when it was enqueued.
 """
 
-import json
 from datetime import UTC, datetime
-from typing import Any
 
-import redis
 import structlog
-from daastaan_common import get_settings
+from daastaan_common import events
 from daastaan_common.models import Job, MediaAsset, PipelineRun, Story, StoryVersion
 from daastaan_contracts import (
     FANOUT_STAGES,
     AssetKind,
     JobStatus,
+    ProgressEvent,
+    StageEvent,
     StageName,
     StoryState,
-    progress_channel,
 )
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, col, select
 
 log = structlog.get_logger(__name__)
-
-_redis: redis.Redis | None = None
-
-
-def _client() -> redis.Redis:
-    global _redis
-    if _redis is None:
-        _redis = redis.from_url(get_settings().redis_url, decode_responses=True)
-    return _redis
 
 
 def load_state(session: Session, version_id: str) -> StoryState:
@@ -60,13 +49,14 @@ def save_state(session: Session, state: StoryState) -> None:
     session.commit()
 
 
-def publish(story_id: str, event: dict[str, Any]) -> None:
+def publish(story_id: str, event: ProgressEvent) -> None:
     """Best-effort progress push. The `jobs` table is the durable record, so a
-    Redis hiccup degrades the UI to polling instead of losing the update."""
-    try:
-        _client().publish(progress_channel(story_id), json.dumps(event))
-    except Exception:
-        log.warning("progress_publish_failed", story_id=story_id, exc_info=True)
+    Redis hiccup degrades the UI to polling instead of losing the update.
+
+    Kept as a thin passthrough so tasks and nodes have one obvious place to reach
+    for, alongside the `start_job`/`finish_job` calls they already make here.
+    """
+    events.publish(story_id, event)
 
 
 def start_job(session: Session, *, story_id: str, version_id: str, stage: StageName) -> Job:
@@ -82,7 +72,7 @@ def start_job(session: Session, *, story_id: str, version_id: str, stage: StageN
     session.add(job)
     session.commit()
 
-    publish(story_id, {"type": "stage", "stage": stage.value, "status": JobStatus.RUNNING.value})
+    publish(story_id, StageEvent(stage=stage, status=JobStatus.RUNNING))
     return job
 
 
@@ -97,7 +87,7 @@ def finish_job(
 
     publish(
         job.story_id,
-        {"type": "stage", "stage": job.stage, "status": status.value, "error": job.error},
+        StageEvent(stage=StageName(job.stage), status=status, error=job.error),
     )
 
 

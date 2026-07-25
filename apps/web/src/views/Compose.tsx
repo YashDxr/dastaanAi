@@ -10,6 +10,35 @@ import type { Ingest, User } from '../types'
 const MAX_CHARS = 24000
 const MIN_CHARS = 20
 
+const LANGUAGE_GROUPS = [
+  {
+    label: null,
+    languages: [
+      { code: 'en', label: 'English' },
+      { code: 'es', label: 'Español' },
+      { code: 'fr', label: 'Français' },
+      { code: 'de', label: 'Deutsch' },
+      { code: 'ja', label: '日本語' },
+    ],
+  },
+  {
+    label: 'Indian',
+    languages: [
+      { code: 'hi', label: 'हिन्दी' },
+      { code: 'bn', label: 'বাংলা' },
+      { code: 'ta', label: 'தமிழ்' },
+      { code: 'te', label: 'తెలుగు' },
+      { code: 'kn', label: 'ಕನ್ನಡ' },
+      { code: 'ml', label: 'മലയാളം' },
+      { code: 'mr', label: 'मराठी' },
+      { code: 'gu', label: 'ગુજરાતી' },
+      { code: 'pa', label: 'ਪੰਜਾਬੀ' },
+      { code: 'or', label: 'ଓଡ଼ିଆ' },
+      { code: 'ur', label: 'اردو' },
+    ],
+  },
+] as const
+
 type Props = {
   user: User
   onLogout: () => void
@@ -20,6 +49,8 @@ type Props = {
 export function Compose({ user, onLogout, onHome, onCreated }: Props) {
   const [text, setText] = useState('')
   const [genre, setGenre] = useState('')
+  const [language, setLanguage] = useState('en')
+  const [outputFormat, setOutputFormat] = useState<'audio' | 'video' | 'both'>('audio')
   const [pending, setPending] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [imported, setImported] = useState<string | null>(null)
@@ -71,7 +102,7 @@ export function Compose({ user, onLogout, onHome, onCreated }: Props) {
             setPending(true)
             setError(null)
             void storiesApi
-              .create(text.trim(), genre.trim() || undefined)
+              .create(text.trim(), genre.trim() || undefined, outputFormat, language)
               .then((res) => onCreated(res.story_id))
               .catch((err) => setError(formatError(err)))
               .finally(() => setPending(false))
@@ -112,6 +143,52 @@ export function Compose({ user, onLogout, onHome, onCreated }: Props) {
               maxLength={60}
             />
           </label>
+
+          <div className="format-selector-group">
+            <label className="compose-label slim">
+              Language
+            </label>
+            {LANGUAGE_GROUPS.map((group) => (
+              <div key={group.label ?? 'global'} className="lang-group">
+                {group.label && <span className="lang-group-label">{group.label}</span>}
+                <div className="format-selector wrap">
+                  {group.languages.map((lang) => (
+                    <button
+                      key={lang.code}
+                      type="button"
+                      className={`chip${language === lang.code ? ' active' : ''}`}
+                      onClick={() => setLanguage(lang.code)}
+                      disabled={pending}
+                    >
+                      {lang.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            ))}
+          </div>
+
+          <div className="format-selector-group">
+            <label className="compose-label slim">
+              Output format
+            </label>
+            <div className="format-selector">
+              {(['audio', 'video', 'both'] as const).map((fmt) => (
+                <button
+                  key={fmt}
+                  type="button"
+                  className={`chip${outputFormat === fmt ? ' active' : ''}`}
+                  onClick={() => setOutputFormat(fmt)}
+                  disabled={pending}
+                >
+                  {fmt === 'audio' ? 'Audio only' : fmt === 'video' ? 'Video' : 'Both'}
+                </button>
+              ))}
+            </div>
+            {outputFormat !== 'audio' && (
+              <p className="format-hint">Video adds scene artwork — uses more credits.</p>
+            )}
+          </div>
 
           {error && <p className="form-error">{error}</p>}
 

@@ -21,6 +21,7 @@ from daastaan_contracts import (
     StoryState,
     ValidatedDirective,
 )
+from daastaan_contracts.limits import SHOT_TAGS
 from sqlalchemy import func
 from sqlmodel import Session, select
 
@@ -157,7 +158,15 @@ def invalidated_dedupe_keys(
             scene_ids = [target_id]
         else:
             scene_ids = [scene.id for scene in state.scenes]
-        stale |= {ids.dedupe_key(AssetKind.SCENE_IMAGE, scene_id=sid) for sid in scene_ids}
+        scene_id_set = set(scene_ids)
+        for sid in scene_ids:
+            stale.add(ids.dedupe_key(AssetKind.SCENE_IMAGE, scene_id=sid))
+            for tag in SHOT_TAGS:
+                stale.add(ids.dedupe_key(AssetKind.SCENE_IMAGE, scene_id=sid, tag=tag))
+        # Per-line image keys (used by video mode)
+        for line in state.lines:
+            if line.scene_id in scene_id_set:
+                stale.add(ids.dedupe_key(AssetKind.SCENE_IMAGE, line_id=line.id))
 
     if StageName.MUSIC_GENERATION in planned_set:
         stale.add(ids.dedupe_key(AssetKind.MUSIC_BED))

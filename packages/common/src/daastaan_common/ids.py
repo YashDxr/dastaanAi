@@ -26,9 +26,17 @@ def line_id(index: int) -> str:
     return f"line_{index:04d}"
 
 
-def dedupe_key(kind: AssetKind, *, line_id: str | None = None, scene_id: str | None = None) -> str:
+def dedupe_key(
+    kind: AssetKind,
+    *,
+    line_id: str | None = None,
+    scene_id: str | None = None,
+    tag: str | None = None,
+) -> str:
     """Stable per-(version, artifact) key used for the idempotency guard."""
     suffix = line_id or scene_id or "single"
+    if tag:
+        suffix = f"{suffix}:{tag}"
     return f"{kind.value}:{suffix}"
 
 
@@ -38,7 +46,10 @@ def object_key(
     *,
     line_id: str | None = None,
     scene_id: str | None = None,
+    tag: str | None = None,
     ext: str = "mp3",
 ) -> str:
     suffix = line_id or scene_id or "final"
+    if tag:
+        suffix = f"{suffix}_{tag}"
     return f"{version_id}/{kind.value}/{suffix}.{ext}"

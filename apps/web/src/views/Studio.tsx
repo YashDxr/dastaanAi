@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { AppHeader } from '../components/AppHeader'
 import { AlternateEndings } from '../components/AlternateEndings'
 import { AudioPlayer } from '../components/AudioPlayer'
+import { VideoPlayer, VideoPlayerEmpty } from '../components/VideoPlayer'
 import { FeedbackComposer } from '../components/FeedbackComposer'
 import { ConsistencyPanel } from '../components/ConsistencyPanel'
 import { ProgressStepper } from '../components/ProgressStepper'
@@ -9,6 +10,7 @@ import { ScenePanel } from '../components/ScenePanel'
 import { ScriptPanel } from '../components/ScriptPanel'
 import { StoryTimeMachine } from '../components/StoryTimeMachine'
 import { formatError, stories as storiesApi, watchProgress } from '../api'
+import { applyEvent, emptyLive } from '../live'
 import type { FeedbackEntry, Progress, StoryDetail, User, Version } from '../types'
 
 type Props = {
@@ -22,6 +24,9 @@ type Props = {
 export function Studio({ user, storyId, onLogout, onHome, onCompose }: Props) {
   const [detail, setDetail] = useState<StoryDetail | null>(null)
   const [progress, setProgress] = useState<Progress | null>(null)
+  // Live progress, folded from the event stream. Kept beside `progress` rather than
+  // merged into it so the polled snapshot stays exactly what the server said.
+  const [live, setLive] = useState(emptyLive)
   const [feedback, setFeedback] = useState<FeedbackEntry[]>([])
   const [versions, setVersions] = useState<Version[]>([])
   const [baseVersionId, setBaseVersionId] = useState<string | null>(null)
@@ -103,10 +108,21 @@ export function Studio({ user, storyId, onLogout, onHome, onCompose }: Props) {
   useEffect(() => {
     const status = progress?.status ?? detail?.story.status
     if (status !== 'generating') return
-    return watchProgress(storyId, () => {
-      void refresh()
+    return watchProgress(storyId, {
+      // `applyEvent` returns the same object when a frame changes nothing, so the
+      // steady drip of heartbeats and token counts does not re-render the studio.
+      onEvent: (event) => setLive((current) => applyEvent(current, event)),
+      onRefresh: () => {
+        void refresh()
+      },
     })
   }, [storyId, progress?.status, detail?.story.status, refresh])
+
+  // A new run starts from a clean overlay. Without this, the previews and counts
+  // from the previous take would still be on screen while the next one warmed up.
+  useEffect(() => {
+    setLive(emptyLive)
+  }, [storyId, detail?.version?.id])
 
   const state = detail?.state
   const regenerating = detail?.story.status === 'generating'
@@ -126,7 +142,15 @@ export function Studio({ user, storyId, onLogout, onHome, onCompose }: Props) {
   const images = liveImages.length
     ? liveImages
     : stickyAssets.filter((a) => a.kind === 'scene_image')
+  const finalVideo =
+    playerAssets.find((a) => a.kind === 'final_video') ??
+    stickyAssets.find((a) => a.kind === 'final_video') ??
+    null
+  const wantsVideo =
+    state?.output_format === 'video' || state?.output_format === 'both'
   const scenes = state?.scenes ?? []
+  const hasMusicBed = playerAssets.some((a) => a.kind === 'music_bed')
+    || stickyAssets.some((a) => a.kind === 'music_bed')
   const timelineDetail =
     baseVersionId && baseVersionId !== detail?.version?.id ? baseDetail : detail
   const timelineState = timelineDetail?.state
@@ -241,7 +265,7 @@ export function Studio({ user, storyId, onLogout, onHome, onCompose }: Props) {
 
             {error && <p className="form-error">{error}</p>}
 
-            <ProgressStepper progress={progress} interpreting={interpreting} />
+            <ProgressStepper progress={progress} live={live} interpreting={interpreting} />
 
             <nav className="studio-tabs" role="tablist" aria-label="Studio sections">
               {(
@@ -286,8 +310,18 @@ export function Studio({ user, storyId, onLogout, onHome, onCompose }: Props) {
                   storyId={storyId}
                   seekLineId={seekLineId}
                   regenerating={regenerating}
+                  hasMusicBed={hasMusicBed}
                   onSeekHandled={() => setSeekLineId(null)}
                 />
+                {finalVideo ? (
+                  <VideoPlayer
+                    asset={finalVideo}
+                    title={detail.story.title}
+                    regenerating={regenerating}
+                  />
+                ) : wantsVideo ? (
+                  <VideoPlayerEmpty regenerating={regenerating} />
+                ) : null}
                 {state?.arc_summary && (
                   <section className="arc-panel">
                     <p className="eyebrow">Arc</p>

@@ -30,6 +30,7 @@ class TaskName(StrEnum):
     COMPOSE_VIDEO = "daastaan.video.compose"
     INGEST_EXTRACT = "daastaan.ingest.extract"
     EXPORT_AUDIO = "daastaan.export.audio"
+    EXPORT_BGM = "daastaan.export.bgm"
 
 
 STAGE_QUEUE: dict[StageName, Queue] = {
@@ -46,8 +47,3 @@ STAGE_QUEUE: dict[StageName, Queue] = {
     StageName.ASSEMBLY: Queue.ASSEMBLY,
     StageName.VIDEO_COMPOSITION: Queue.ASSEMBLY,
 }
-
-# Redis pub/sub channel the workers publish progress to and the API's WebSocket
-# endpoint subscribes to.
-def progress_channel(story_id: str) -> str:
-    return f"daastaan:progress:{story_id}"

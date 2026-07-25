@@ -503,6 +503,7 @@ def voice_assignment(session: Session, state: StoryState, gw: ModelGateway) -> S
             new_characters,
             pins=pins,
             unavailable={assignment.voice_preset for assignment in frozen.values()},
+            language=state.language,
         )
         assignments: list[VoiceAssignment] = []
         for character in state.characters:
@@ -527,7 +528,7 @@ def voice_assignment(session: Session, state: StoryState, gw: ModelGateway) -> S
         )
         return state
 
-    cast = casting.assign_voices(state.characters, pins=pins)
+    cast = casting.assign_voices(state.characters, pins=pins, language=state.language)
 
     assignments: list[VoiceAssignment] = []
     for character in state.characters:

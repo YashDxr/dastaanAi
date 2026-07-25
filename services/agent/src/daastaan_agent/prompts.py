@@ -213,6 +213,7 @@ SCENE_IMAGE = """Illustrate this scene from an audio drama as a single evocative
 Cinematic lighting, painterly, no text or lettering anywhere in the image, no watermarks."""
 
 
+
 def consistency_check_prompt(language: str = "en") -> str:
     """Prompt for the read-only Plot Hole Hunter.
 
@@ -241,3 +242,32 @@ def consistency_check_prompt(language: str = "en") -> str:
         f"Write the summary, explanation, and suggestion in {_language_name(language)}.",
     )
     return f"{base}{lang}\n{GUARDRAIL}"
+
+
+_STYLE_SUFFIX = "Cinematic lighting, painterly, no text or lettering anywhere in the image, no watermarks."
+
+def line_image_prompt(shot_type: str, scene, line, mood: str) -> str:
+    """Build a per-line DALL-E prompt incorporating shot framing, scene context, and the line's text."""
+    shot_instruction = SHOT_PROMPTS.get(shot_type, SHOT_PROMPTS["mid"])
+    return (
+        f"{shot_instruction}\n\n"
+        f"Scene: {scene.title}. {scene.summary}\n"
+        f"Setting: {scene.setting}. Mood: {mood}.\n"
+        f"Current moment: \"{line.text}\""
+    )
+
+
+SHOT_PROMPTS: dict[str, str] = {
+    "wide": (
+        "Wide establishing shot. Show the full environment and setting with characters "
+        "small in the frame.\n" + _STYLE_SUFFIX
+    ),
+    "mid": (
+        "Medium action shot. Show the main characters engaged in the scene's key action.\n"
+        + _STYLE_SUFFIX
+    ),
+    "close": (
+        "Intimate close-up. Focus on a character's face or a meaningful detail that "
+        "conveys the emotion.\n" + _STYLE_SUFFIX
+    ),
+}

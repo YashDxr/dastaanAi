@@ -198,7 +198,15 @@ class TestFullStory:
     def test_keeps_nothing(self, state):
         stale = _invalidated(state, Scope.FULL_STORY, StageName.MOOD_CLASSIFICATION, None)
         expected = {f"line_audio:line_{i:04d}" for i in range(4)}
-        expected |= {f"scene_image:scene_{i:02d}" for i in range(2)}
+        # Base scene keys, per-shot-type variants, and per-line keys (video mode).
+        # invalidated_dedupe_keys generates all three so a carry-over never leaks an
+        # old artifact into a fresh run regardless of which generation path was used.
+        for i in range(2):
+            expected.add(f"scene_image:scene_{i:02d}")
+            for tag in ("wide", "mid", "close"):
+                expected.add(f"scene_image:scene_{i:02d}:{tag}")
+        # All four lines are in scene_00 so they all fall inside the invalidated set.
+        expected |= {f"scene_image:line_{i:04d}" for i in range(4)}
         expected.add("music_bed:single")
         assert stale == expected
 

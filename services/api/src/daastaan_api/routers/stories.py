@@ -2,6 +2,7 @@ from daastaan_common import carry_over_assets, next_version_number, prepare_rege
 from daastaan_common.models import Job, MediaAsset, Story, StoryVersion
 from daastaan_contracts import (
     PIPELINE_STAGES,
+    AssetKind,
     Scope,
     StageName,
     StoryState,
@@ -10,7 +11,7 @@ from daastaan_contracts import (
     plan_stages,
 )
 from fastapi import APIRouter, HTTPException, status
-from sqlmodel import select
+from sqlmodel import Session, select
 
 from ..deps import CurrentUser, OwnedStory, SessionDep
 from ..dispatch import dispatch_pipeline, dispatch_regeneration
@@ -22,6 +23,7 @@ from ..schemas import (
     JobOut,
     ProgressOut,
     RegenerateRequest,
+    StageProgressOut,
     StoryDetailOut,
     StoryOut,
     VersionOut,
@@ -159,7 +161,57 @@ def get_progress(story: OwnedStory, session: SessionDep) -> ProgressOut:
         status=story.status,
         planned_stages=[stage.value for stage in _planned_stages(version)],
         jobs=[JobOut.model_validate(job, from_attributes=True) for job in jobs],
+        stage_progress=_fanout_progress(session, version),
     )
+
+
+def _fanout_progress(session: Session, version: StoryVersion | None) -> list[StageProgressOut]:
+    """Per-line and per-scene completion, recomputed from durable state.
+
+    The live stream reports the same figures from a Redis counter. This is the
+    version that survives a Redis flush, a worker restart, or a browser that never
+    managed to open the stream at all - so the fan-out stages still show real
+    movement rather than sitting on a single "running" chip for minutes.
+
+    Placeholder rows are excluded: `claim_asset` commits an empty `object_key`
+    before the paid call, so counting those would report a line as finished at the
+    moment its generation began.
+    """
+    if version is None:
+        return []
+    try:
+        state = StoryState.model_validate(version.state_json)
+    except Exception:
+        # Progress is a read-only convenience; a version whose state cannot be
+        # parsed still has stage rows worth returning.
+        return []
+
+    assets = list(
+        session.exec(
+            select(MediaAsset).where(
+                MediaAsset.version_id == version.id,
+                MediaAsset.object_key != "",
+            )
+        ).all()
+    )
+
+    totals: list[tuple[StageName, AssetKind, int]] = [
+        (StageName.TTS_SYNTHESIS, AssetKind.LINE_AUDIO, len(state.lines)),
+        (
+            StageName.IMAGE_GENERATION,
+            AssetKind.SCENE_IMAGE,
+            min(len(state.scenes), limits.MAX_IMAGES_PER_STORY),
+        ),
+    ]
+    progress = []
+    for stage, kind, total in totals:
+        if not total:
+            continue
+        completed = sum(1 for asset in assets if asset.kind == kind)
+        progress.append(
+            StageProgressOut(stage=stage.value, completed=min(completed, total), total=total)
+        )
+    return progress
 
 
 def _planned_stages(version: StoryVersion | None) -> tuple[StageName, ...]:

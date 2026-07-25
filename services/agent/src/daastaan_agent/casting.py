@@ -54,6 +54,34 @@ VOICE_CATALOGUE: tuple[Voice, ...] = (
 
 VOICES_BY_ID = {voice.id: voice for voice in VOICE_CATALOGUE}
 
+# Sarvam bulbul:v3 roster — Hindi-native voices for Indian languages.
+SARVAM_VOICE_CATALOGUE: tuple[Voice, ...] = (
+    Voice("manan", VoiceGender.MASCULINE, VoiceAge.ADULT, "conversational and consistent"),
+    Voice("shubh", VoiceGender.MASCULINE, VoiceAge.YOUNG, "conversational and friendly"),
+    Voice("amit", VoiceGender.MASCULINE, VoiceAge.ADULT, "professional and steady"),
+    Voice("ratan", VoiceGender.MASCULINE, VoiceAge.ELDER, "deep and authoritative"),
+    Voice("rohan", VoiceGender.MASCULINE, VoiceAge.YOUNG, "open and energetic"),
+    Voice("kabir", VoiceGender.MASCULINE, VoiceAge.ADULT, "warm and grounded"),
+    Voice("ritu", VoiceGender.FEMININE, VoiceAge.ADULT, "expressive and emotional"),
+    Voice("shreya", VoiceGender.FEMININE, VoiceAge.ADULT, "authoritative and clear"),
+    Voice("ishita", VoiceGender.FEMININE, VoiceAge.YOUNG, "dynamic and lively"),
+    Voice("priya", VoiceGender.FEMININE, VoiceAge.ADULT, "precise and measured"),
+    Voice("simran", VoiceGender.FEMININE, VoiceAge.YOUNG, "bright and warm"),
+)
+
+SARVAM_VOICES_BY_ID = {voice.id: voice for voice in SARVAM_VOICE_CATALOGUE}
+
+# Role affinity for Sarvam voices
+_SARVAM_ROLE_AFFINITY: dict[CharacterRole, frozenset[str]] = {
+    CharacterRole.NARRATOR: frozenset({"manan", "ritu", "amit"}),
+    CharacterRole.ANTAGONIST: frozenset({"ratan", "shreya", "kabir"}),
+    CharacterRole.PROTAGONIST: frozenset({"shubh", "ishita", "rohan"}),
+    CharacterRole.SUPPORTING: frozenset(),
+}
+
+# Languages served by the Sarvam bulbul:v3 model.
+SARVAM_LANGUAGES = frozenset({"hi", "bn", "ta", "te", "kn", "ml", "mr", "gu", "pa", "or", "ur"})
+
 # Age is ordinal, so a mismatch should be scored by distance: casting an elder as
 # an adult is a smaller error than casting them as a child.
 _AGE_ORDER: dict[VoiceAge, int] = {
@@ -97,12 +125,29 @@ def _gender_score(character: VoiceGender, voice: VoiceGender) -> int:
     return 0
 
 
-def score(character: Character, voice: Voice) -> int:
+def score(
+    character: Character,
+    voice: Voice,
+    role_affinity: dict[CharacterRole, frozenset[str]] | None = None,
+) -> int:
+    affinity = role_affinity if role_affinity is not None else _ROLE_AFFINITY
     value = _gender_score(character.gender, voice.gender)
     value -= abs(_AGE_ORDER[character.age] - _AGE_ORDER[voice.age]) * AGE_STEP_PENALTY
-    if voice.id in _ROLE_AFFINITY.get(character.role, frozenset()):
+    if voice.id in affinity.get(character.role, frozenset()):
         value += ROLE_BONUS
     return value
+
+
+def _use_sarvam(language: str) -> bool:
+    """Whether the given language should use the Sarvam voice catalogue.
+
+    Requires the Sarvam API key to be configured; without it, OpenAI voices
+    are used with a language hint (existing fallback behaviour).
+    """
+    if language not in SARVAM_LANGUAGES:
+        return False
+    from daastaan_common import get_settings
+    return bool(get_settings().sarvam_api_key)
 
 
 def assign_voices(
@@ -110,6 +155,7 @@ def assign_voices(
     *,
     pins: dict[str, str] | None = None,
     unavailable: set[str] | None = None,
+    language: str = "en",
 ) -> dict[str, Voice]:
     """One voice per character, keyed by character id.
 
@@ -124,9 +170,13 @@ def assign_voices(
     if not characters:
         return {}
 
+    use_sarvam = _use_sarvam(language)
+    catalogue = SARVAM_VOICE_CATALOGUE if use_sarvam else VOICE_CATALOGUE
+    role_affinity = _SARVAM_ROLE_AFFINITY if use_sarvam else _ROLE_AFFINITY
+
     available = {
         voice.id: voice
-        for voice in VOICE_CATALOGUE
+        for voice in catalogue
         if voice.id not in (unavailable or set())
     }
     assigned: dict[str, Voice] = {}
@@ -153,16 +203,12 @@ def assign_voices(
         if character.id in assigned:
             continue
         if not available:
-            # Only reachable with more characters than the provider has voices,
-            # which `limits.MAX_CHARACTERS` currently prevents. Reuse the
-            # best-matching voice rather than failing the story outright.
-            fallback = max(VOICE_CATALOGUE, key=lambda v: score(character, v))
+            fallback = max(catalogue, key=lambda v: score(character, v, role_affinity))
             log.warning("voice_pool_exhausted", character=character.name, voice=fallback.id)
             assigned[character.id] = fallback
             continue
 
-        # Ties broken by id so the result never depends on dict ordering.
-        best = max(available.values(), key=lambda v: (score(character, v), v.id))
+        best = max(available.values(), key=lambda v: (score(character, v, role_affinity), v.id))
         del available[best.id]
         assigned[character.id] = best
 

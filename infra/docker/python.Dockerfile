@@ -18,10 +18,15 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         ffmpeg \
         curl \
+        fonts-dejavu-core \
+        fonts-noto-core \
+        fonts-indic \
+        fontconfig \
         tesseract-ocr \
         tesseract-ocr-eng \
         tesseract-ocr-hin \
         poppler-utils \
+    && fc-cache -f \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=ghcr.io/astral-sh/uv:0.11 /uv /usr/local/bin/uv

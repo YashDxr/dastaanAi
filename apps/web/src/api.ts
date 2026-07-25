@@ -1,4 +1,6 @@
 import { ApiError, apiFetch, openProgressStream } from '@daastaan/api-types'
+import type { ProgressEvent } from '@daastaan/api-types'
+import { needsRefresh } from './live'
 import type {
   DispatchAccepted,
   ConsistencyCheck,
@@ -43,10 +45,10 @@ export const stories = {
   versions: (id: string) => apiFetch<Version[]>(`/stories/${id}/versions`),
   version: (id: string, versionId: string) =>
     apiFetch<StoryDetail>(`/stories/${id}/versions/${versionId}`),
-  create: (raw_text: string, genre_hint?: string) =>
+  create: (raw_text: string, genre_hint?: string, output_format?: string, language?: string) =>
     apiFetch<DispatchAccepted>('/stories', {
       method: 'POST',
-      body: JSON.stringify({ raw_text, genre_hint: genre_hint || null }),
+      body: JSON.stringify({ raw_text, genre_hint: genre_hint || null, output_format: output_format || 'audio', language: language || 'en' }),
     }),
   progress: (id: string) => apiFetch<Progress>(`/stories/${id}/jobs`),
   feedback: (id: string, raw_text: string) =>
@@ -63,6 +65,12 @@ export const stories = {
   requestExport: (id: string, format: string) =>
     apiFetch<{ format: string; ready: boolean; url: string | null; size_bytes: number | null }>(
       `/stories/${id}/exports`,
+      { method: 'POST', body: JSON.stringify({ format }) },
+    ),
+  bgmExports: (id: string) => apiFetch<ExportFormat[]>(`/stories/${id}/bgm/exports`),
+  requestBgmExport: (id: string, format: string) =>
+    apiFetch<{ format: string; ready: boolean; url: string | null; size_bytes: number | null }>(
+      `/stories/${id}/bgm/exports`,
       { method: 'POST', body: JSON.stringify({ format }) },
     ),
   regenerate: (
@@ -95,25 +103,43 @@ export const ingest = {
  *  than the old unconditional 2s poll because it is now genuinely a fallback. */
 const FALLBACK_POLL_MS = 5000
 
+/** How long to gather content-changing events before refetching.
+ *
+ *  A fan-out lands dozens of assets in a burst, and each one used to trigger its own
+ *  three requests. Coalescing them costs a fraction of a second of staleness on
+ *  content the user is not looking at yet, and the progress bar does not wait for
+ *  any of it — that now moves on the event itself. */
+const REFRESH_COALESCE_MS = 400
+
+type Watchers = {
+  /** Applied immediately, on every frame. This is what makes the UI feel live. */
+  onEvent: (event: ProgressEvent) => void
+  /** Called when authoritative state should be re-read. Already coalesced. */
+  onRefresh: () => void
+}
+
 /**
  * Watch a story's progress.
  *
- * SSE is the primary channel and polling only runs while the stream is down.
- * The previous version started a 2s interval unconditionally alongside the
- * socket, so it kept polling even when live updates were arriving perfectly.
+ * SSE is the primary channel and polling only runs while the stream is down. The
+ * events themselves now drive the UI: the previous version discarded every payload
+ * and refetched `/jobs` instead, so progress could only move as fast as a round trip
+ * and could only ever be as detailed as the `jobs` table.
  *
- * `EventSource` retries on its own, so an error is not necessarily terminal:
- * polling starts on the first failure and is cancelled again the moment the
- * stream reopens.
+ * `EventSource` retries on its own, so an error is not necessarily terminal: polling
+ * starts on the first failure and is cancelled again the moment the stream reopens.
+ * Reconnection resumes from the last event this client saw, so nothing published
+ * during the gap is lost.
  */
-export function watchProgress(storyId: string, onEvent: () => void): () => void {
+export function watchProgress(storyId: string, watchers: Watchers): () => void {
   let source: EventSource | null = null
   let pollTimer: number | undefined
+  let refreshTimer: number | undefined
   let closed = false
 
   const startPolling = () => {
     if (pollTimer !== undefined || closed) return
-    pollTimer = window.setInterval(onEvent, FALLBACK_POLL_MS)
+    pollTimer = window.setInterval(watchers.onRefresh, FALLBACK_POLL_MS)
   }
 
   const stopPolling = () => {
@@ -122,12 +148,25 @@ export function watchProgress(storyId: string, onEvent: () => void): () => void 
     pollTimer = undefined
   }
 
+  const scheduleRefresh = () => {
+    if (closed || refreshTimer !== undefined) return
+    refreshTimer = window.setTimeout(() => {
+      refreshTimer = undefined
+      watchers.onRefresh()
+    }, REFRESH_COALESCE_MS)
+  }
+
   try {
     source = openProgressStream(storyId, {
-      onEvent: () => onEvent(),
+      onEvent: (event) => {
+        watchers.onEvent(event)
+        if (needsRefresh(event)) scheduleRefresh()
+      },
       onOpen: () => {
         stopPolling()
-        onEvent()
+        // The stream replays the run so far, but only progress events - the story
+        // content itself has to come from REST.
+        watchers.onRefresh()
       },
       onError: startPolling,
     })
@@ -137,11 +176,12 @@ export function watchProgress(storyId: string, onEvent: () => void): () => void 
 
   // One immediate read so the stepper is populated before the first event, then
   // nothing further until either an event arrives or the stream fails.
-  onEvent()
+  watchers.onRefresh()
 
   return () => {
     closed = true
     stopPolling()
+    if (refreshTimer !== undefined) window.clearTimeout(refreshTimer)
     source?.close()
   }
 }

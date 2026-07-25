@@ -16,7 +16,7 @@ from fastapi import APIRouter, HTTPException, status
 from sqlmodel import select
 
 from ..deps import CurrentUser, OwnedStory, SessionDep
-from ..dispatch import dispatch_audio_export
+from ..dispatch import dispatch_audio_export, dispatch_bgm_export
 from ..schemas import ExportFormatOut, ExportOut, ExportRequest
 
 log = structlog.get_logger(__name__)
@@ -136,4 +136,121 @@ def create_export(
         )
 
     dispatch_audio_export(version_id=version.id, user_id=user.id, fmt=body.format)
+    return ExportOut(format=body.format, ready=False, url=None, size_bytes=None)
+
+
+# ---------------------------------------------------------------------------
+# BGM (background music bed) exports
+# ---------------------------------------------------------------------------
+
+BGM_FORMATS: dict[str, dict[str, str]] = {
+    "wav": {
+        "label": "WAV",
+        "content_type": "audio/wav",
+        "detail": "Original lossless file from Stable Audio. Best quality, largest file.",
+    },
+    "mp3": {
+        "label": "MP3",
+        "content_type": "audio/mpeg",
+        "detail": "First-generation encode from lossless source. Great quality, plays everywhere.",
+    },
+    "flac": {
+        "label": "FLAC",
+        "content_type": "audio/flac",
+        "detail": "Lossless container. Same quality as WAV, slightly smaller.",
+    },
+    "m4a": {
+        "label": "M4A (AAC)",
+        "content_type": "audio/mp4",
+        "detail": "Best for Apple devices and video editing on Mac.",
+    },
+    "opus": {
+        "label": "Opus",
+        "content_type": "audio/ogg",
+        "detail": "Smallest file. Not supported by older Apple software.",
+    },
+}
+
+BGM_RECOMMENDED = "wav"
+
+
+def _bgm_assets(session, version_id: str) -> dict[str, MediaAsset]:
+    """Available BGM downloads by format.
+
+    WAV answers for the native key; every other entry is a stored transcode.
+    """
+    rows = session.exec(
+        select(MediaAsset).where(
+            MediaAsset.version_id == version_id,
+            MediaAsset.kind.in_([AssetKind.MUSIC_BED, AssetKind.BGM_EXPORT]),
+        )
+    ).all()
+
+    found: dict[str, MediaAsset] = {}
+    for asset in rows:
+        if asset.kind == AssetKind.MUSIC_BED:
+            found["wav"] = asset
+        else:
+            found[asset.dedupe_key.rpartition(":")[2]] = asset
+    return found
+
+
+def _bgm_listing(session, version_id: str) -> list[ExportFormatOut]:
+    available = _bgm_assets(session, version_id)
+    return [
+        ExportFormatOut(
+            format=fmt,
+            label=meta["label"],
+            content_type=meta["content_type"],
+            detail=meta["detail"],
+            recommended=fmt == BGM_RECOMMENDED,
+            ready=fmt in available,
+            url=f"/api/media/{available[fmt].id}?download=1" if fmt in available else None,
+            size_bytes=available[fmt].size_bytes if fmt in available else None,
+        )
+        for fmt, meta in BGM_FORMATS.items()
+    ]
+
+
+@router.get("/{story_id}/bgm/exports", response_model=list[ExportFormatOut])
+def list_bgm_exports(story: OwnedStory, session: SessionDep) -> list[ExportFormatOut]:
+    version = _current_version(story, session)
+    return _bgm_listing(session, version.id)
+
+
+@router.post("/{story_id}/bgm/exports", response_model=ExportOut)
+def create_bgm_export(
+    story: OwnedStory, body: ExportRequest, session: SessionDep, user: CurrentUser
+) -> ExportOut:
+    if body.format not in BGM_FORMATS:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, f"unknown BGM format: {body.format}")
+
+    version = _current_version(story, session)
+    available = _bgm_assets(session, version.id)
+
+    if "wav" not in available:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "this story has no background music yet; generate one first",
+        )
+
+    if asset := available.get(body.format):
+        return ExportOut(
+            format=body.format,
+            ready=True,
+            url=f"/api/media/{asset.id}?download=1",
+            size_bytes=asset.size_bytes,
+        )
+
+    # WAV is always ready from the music_bed asset — no transcode needed.
+    if body.format == "wav":
+        wav = available["wav"]
+        return ExportOut(
+            format="wav",
+            ready=True,
+            url=f"/api/media/{wav.id}?download=1",
+            size_bytes=wav.size_bytes,
+        )
+
+    dispatch_bgm_export(version_id=version.id, user_id=user.id, fmt=body.format)
     return ExportOut(format=body.format, ready=False, url=None, size_bytes=None)
