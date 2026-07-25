@@ -97,6 +97,29 @@ A regeneration runs the same chain built from a shorter slice of the stage
 registry. "Make line 12 angrier" re-runs emotion tagging for that one line, its
 TTS, and assembly - three steps, not thirty.
 
+Progress reaches the browser over SSE (`GET /api/stories/{id}/events`) fed by
+Redis pub/sub, with `GET /api/stories/{id}/jobs` as the polling fallback while
+the stream is down. The WebSocket at `/ws/stories/{id}` is still served for
+non-browser clients.
+
+## Response cache
+
+Every paid call is cached by a SHA-256 of its full input - model, parameters and
+prompt - so identical work is never bought twice. The scope is global: keys
+contain no user or story id, which is safe because a hit can only be served to a
+byte-identical request. Text results sit in Redis; audio and images go to the
+object store under a content-addressed key with Redis holding the pointer, so a
+Redis flush costs a re-probe rather than a re-purchase.
+
+A cache hit still writes a `cost_ledger` row, at zero cost with `cache_hit` set,
+so the admin console can report what the cache saved instead of the spend simply
+being lower with nothing to attribute it to.
+
+**Regenerations always bypass the cache.** A line respeak reaches TTS with the
+same text, voice and instructions as the take it is replacing, so a read-through
+cache would return that exact take and the regeneration would appear to do
+nothing. `CACHE_ENABLED=false` turns the whole thing off while tuning prompts.
+
 ## Things worth knowing before you change something
 
 - **Every paid call goes through `ModelGateway`.** That is what keeps the cost
@@ -113,6 +136,17 @@ TTS, and assembly - three steps, not thirty.
   the runtime path requires a Databricks account.
 - **Regenerate the frontend types after changing a Pydantic schema:**
   `make types` with the API running.
+- **JSONB columns use `MutableDict`.** SQLAlchemy cannot see an in-place edit to
+  a plain dict, so `version.state_json["key"] = value` would be silently dropped
+  on flush. `_json_column` in `models.py` wraps every JSONB column to make those
+  writes stick; keep new JSONB columns going through it.
+- **A new column needs an entry in `_ADDED_COLUMNS`.** There is no Alembic here.
+  `create_all` adds missing tables but never missing columns, so column
+  additions are replayed at startup as `ALTER TABLE ... ADD COLUMN IF NOT
+  EXISTS` from that list in `db.py`.
+- **A "run" in the admin console is a `StoryVersion`**, derived from `jobs` and
+  `cost_ledger` in `services/api/src/daastaan_api/analytics.py`. The
+  `pipeline_runs` table is legacy and nothing writes to it.
 
 ## Known rough edges
 

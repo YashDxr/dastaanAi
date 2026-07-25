@@ -1,6 +1,7 @@
-import { ApiError, apiFetch, openProgressSocket } from '@daastaan/api-types'
+import { ApiError, apiFetch, openProgressStream } from '@daastaan/api-types'
 import type {
   DispatchAccepted,
+  FeedbackEntry,
   Progress,
   Story,
   StoryDetail,
@@ -46,6 +47,7 @@ export const stories = {
       method: 'POST',
       body: JSON.stringify({ raw_text }),
     }),
+  feedbackHistory: (id: string) => apiFetch<FeedbackEntry[]>(`/stories/${id}/feedback`),
   regenerate: (
     id: string,
     body: {
@@ -61,33 +63,57 @@ export const stories = {
     }),
 }
 
-export function watchProgress(
-  storyId: string,
-  onEvent: () => void,
-): () => void {
-  let socket: WebSocket | null = null
+/** How often to re-read `/jobs` when the event stream is unavailable. Slower
+ *  than the old unconditional 2s poll because it is now genuinely a fallback. */
+const FALLBACK_POLL_MS = 5000
+
+/**
+ * Watch a story's progress.
+ *
+ * SSE is the primary channel and polling only runs while the stream is down.
+ * The previous version started a 2s interval unconditionally alongside the
+ * socket, so it kept polling even when live updates were arriving perfectly.
+ *
+ * `EventSource` retries on its own, so an error is not necessarily terminal:
+ * polling starts on the first failure and is cancelled again the moment the
+ * stream reopens.
+ */
+export function watchProgress(storyId: string, onEvent: () => void): () => void {
+  let source: EventSource | null = null
   let pollTimer: number | undefined
   let closed = false
 
   const startPolling = () => {
     if (pollTimer !== undefined || closed) return
-    pollTimer = window.setInterval(onEvent, 2000)
+    pollTimer = window.setInterval(onEvent, FALLBACK_POLL_MS)
+  }
+
+  const stopPolling = () => {
+    if (pollTimer === undefined) return
+    window.clearInterval(pollTimer)
+    pollTimer = undefined
   }
 
   try {
-    socket = openProgressSocket(storyId, () => onEvent())
-    socket.onopen = () => onEvent()
-    socket.onerror = () => startPolling()
-    socket.onclose = () => startPolling()
+    source = openProgressStream(storyId, {
+      onEvent: () => onEvent(),
+      onOpen: () => {
+        stopPolling()
+        onEvent()
+      },
+      onError: startPolling,
+    })
   } catch {
     startPolling()
   }
 
-  startPolling()
+  // One immediate read so the stepper is populated before the first event, then
+  // nothing further until either an event arrives or the stream fails.
+  onEvent()
 
   return () => {
     closed = true
-    if (pollTimer !== undefined) window.clearInterval(pollTimer)
-    socket?.close()
+    stopPolling()
+    source?.close()
   }
 }

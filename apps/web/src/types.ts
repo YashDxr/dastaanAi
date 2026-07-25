@@ -51,6 +51,24 @@ export type Progress = {
   jobs: Job[]
 }
 
+export type RegenDirective = {
+  scope?: string
+  target_stage?: string
+  target_id?: string | null
+  instruction_delta?: string
+  reason?: string
+}
+
+export type FeedbackEntry = {
+  id: string
+  raw_text: string
+  status: string
+  error: string | null
+  directive_json: RegenDirective | null
+  resulting_version_id: string | null
+  created_at: string
+}
+
 export type StoryDetail = {
   story: Story
   version: Version | null
@@ -142,6 +160,29 @@ export const STAGE_LABELS: Record<string, string> = {
   tts_synthesis: 'Speech',
   image_generation: 'Imagery',
   assembly: 'Mix',
+}
+
+/** What each stage actually does, written for a listener rather than an engineer. */
+export const STAGE_DESCRIPTIONS: Record<string, string> = {
+  mood_classification:
+    'Reads your story and decides its genre, tone and pace, which every later stage takes its cues from.',
+  story_understanding:
+    'Breaks the story into scenes and writes the arc, setting and title.',
+  character_registry:
+    'Works out who is in the story and gives each person an age, gender and personality.',
+  dialogue_attribution:
+    'Turns the prose into a script, splitting it into narration and spoken lines and assigning each line to a character.',
+  emotion_tagging:
+    'Marks every line with an emotion and intensity, so the voice knows whether to whisper it or shout it.',
+  narrator_persona:
+    'Chooses how the narrator should sound: their warmth, pace and distance from the story.',
+  voice_assignment:
+    'Casts a real voice for each character, matching age, gender and personality.',
+  tts_synthesis:
+    'Records every line with its assigned voice and emotion. This is the longest stage.',
+  image_generation: 'Paints cover artwork for each scene.',
+  assembly:
+    'Stitches the recorded lines together with pacing and pauses into the final episode.',
 }
 
 export const PIPELINE_ORDER = Object.keys(STAGE_LABELS)

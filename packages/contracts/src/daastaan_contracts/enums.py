@@ -35,6 +35,19 @@ class JobStatus(StrEnum):
     SKIPPED = "skipped"
 
 
+class FeedbackStatus(StrEnum):
+    """Outcome of interpreting one piece of free-text feedback.
+
+    Interpretation can fail on a decision rather than an outage - moderation
+    refusing the text, or the model naming a stage that is not a legal entry
+    point - so the attempt needs a durable outcome the user can be shown.
+    """
+
+    PENDING = "pending"
+    APPLIED = "applied"
+    FAILED = "failed"
+
+
 class StoryStatus(StrEnum):
     DRAFT = "draft"
     GENERATING = "generating"

@@ -3,9 +3,10 @@ import { AppHeader } from '../components/AppHeader'
 import { AudioPlayer } from '../components/AudioPlayer'
 import { FeedbackComposer } from '../components/FeedbackComposer'
 import { ProgressStepper } from '../components/ProgressStepper'
+import { ScenePanel } from '../components/ScenePanel'
 import { ScriptPanel } from '../components/ScriptPanel'
 import { formatError, stories as storiesApi, watchProgress } from '../api'
-import type { Progress, StoryDetail, User } from '../types'
+import type { FeedbackEntry, Progress, StoryDetail, User } from '../types'
 
 type Props = {
   user: User
@@ -18,8 +19,10 @@ type Props = {
 export function Studio({ user, storyId, onLogout, onHome, onCompose }: Props) {
   const [detail, setDetail] = useState<StoryDetail | null>(null)
   const [progress, setProgress] = useState<Progress | null>(null)
+  const [feedback, setFeedback] = useState<FeedbackEntry[]>([])
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
+  const [tab, setTab] = useState<'episode' | 'scenes'>('episode')
   const [seekLineId, setSeekLineId] = useState<string | null>(null)
   // The version a respeak was requested from. The seek has to survive until the
   // rebuilt mix arrives, so it can land on the same line in the new episode and
@@ -30,12 +33,14 @@ export function Studio({ user, storyId, onLogout, onHome, onCompose }: Props) {
 
   const refresh = useCallback(async () => {
     try {
-      const [d, p] = await Promise.all([
+      const [d, p, f] = await Promise.all([
         storiesApi.get(storyId),
         storiesApi.progress(storyId),
+        storiesApi.feedbackHistory(storyId),
       ])
       setDetail(d)
       setProgress(p)
+      setFeedback(f)
       setError(null)
       if (d.assets.some((a) => a.kind === 'final_episode')) {
         setStickyAssets(d.assets)
@@ -71,6 +76,9 @@ export function Studio({ user, storyId, onLogout, onHome, onCompose }: Props) {
 
   const state = detail?.state
   const regenerating = detail?.story.status === 'generating'
+  // Interpretation happens before any job row exists, so the progress stepper
+  // has nothing to show for it. This is what tells the user their note landed.
+  const interpreting = feedback.some((f) => f.status === 'pending')
   // A regeneration forks a new version and carries reusable assets over, but the
   // final mix is always rebuilt. Fall back to the last ready set so the player and
   // the scene art stay on screen through that gap instead of blinking out.
@@ -84,6 +92,7 @@ export function Studio({ user, storyId, onLogout, onHome, onCompose }: Props) {
   const images = liveImages.length
     ? liveImages
     : stickyAssets.filter((a) => a.kind === 'scene_image')
+  const scenes = state?.scenes ?? []
 
   async function respeakLine(lineId: string) {
     setBusy(true)
@@ -138,9 +147,43 @@ export function Studio({ user, storyId, onLogout, onHome, onCompose }: Props) {
 
             {error && <p className="form-error">{error}</p>}
 
-            <ProgressStepper progress={progress} />
+            <ProgressStepper progress={progress} interpreting={interpreting} />
 
-            <div className="studio-grid">
+            <nav className="studio-tabs" role="tablist" aria-label="Studio sections">
+              {(
+                [
+                  ['episode', 'Episode'],
+                  ['scenes', 'Scenes'],
+                ] as const
+              ).map(([id, label]) => (
+                <button
+                  key={id}
+                  type="button"
+                  role="tab"
+                  id={`studio-tab-${id}`}
+                  aria-selected={tab === id}
+                  aria-controls={`studio-panel-${id}`}
+                  className={tab === id ? 'active' : ''}
+                  onClick={() => setTab(id)}
+                >
+                  {label}
+                  {id === 'scenes' && scenes.length > 0 && (
+                    <span className="tab-count">{scenes.length}</span>
+                  )}
+                </button>
+              ))}
+            </nav>
+
+            {/* Both panels stay mounted and are hidden with CSS. Unmounting the
+                Episode panel would tear down the audio element and stop playback
+                the moment someone glanced at the scene art. */}
+            <div
+              className="studio-grid"
+              id="studio-panel-episode"
+              role="tabpanel"
+              aria-labelledby="studio-tab-episode"
+              hidden={tab !== 'episode'}
+            >
               <div className="studio-main">
                 <AudioPlayer
                   assets={playerAssets}
@@ -170,15 +213,16 @@ export function Studio({ user, storyId, onLogout, onHome, onCompose }: Props) {
                   busy={busy || regenerating}
                   onRegenerateLine={respeakLine}
                 />
-                {detail.story.status === 'ready' && (
-                  <FeedbackComposer
-                    disabled={busy}
-                    onSubmit={async (text) => {
-                      await storiesApi.feedback(storyId, text)
-                      await refresh()
-                    }}
-                  />
-                )}
+                <FeedbackComposer
+                  disabled={busy || regenerating}
+                  interpreting={interpreting}
+                  history={feedback}
+                  state={state}
+                  onSubmit={async (text) => {
+                    await storiesApi.feedback(storyId, text)
+                    await refresh()
+                  }}
+                />
               </div>
 
               <aside className="studio-side">
@@ -195,26 +239,27 @@ export function Studio({ user, storyId, onLogout, onHome, onCompose }: Props) {
                     {!state?.characters?.length && <li className="muted">Casting in progress…</li>}
                   </ul>
                 </section>
-
-                <section className="scenes-panel">
-                  <p className="eyebrow">Scenes</p>
-                  <ul>
-                    {(state?.scenes ?? []).map((scene) => {
-                      const image = images.find((a) => a.scene_id === scene.id)
-                      return (
-                        <li key={scene.id}>
-                          {image && (
-                            <img src={image.url} alt="" className="scene-thumb" loading="lazy" />
-                          )}
-                          <strong>{scene.title}</strong>
-                          <p className="muted">{scene.summary}</p>
-                        </li>
-                      )
-                    })}
-                    {!state?.scenes?.length && <li className="muted">Blocking scenes…</li>}
-                  </ul>
-                </section>
               </aside>
+            </div>
+
+            <div
+              id="studio-panel-scenes"
+              role="tabpanel"
+              aria-labelledby="studio-tab-scenes"
+              hidden={tab !== 'scenes'}
+            >
+              <ScenePanel
+                scenes={scenes}
+                images={images}
+                lines={state?.lines ?? []}
+                pending={regenerating || detail.story.status === 'generating'}
+                onPlayScene={(lineId) => {
+                  // Jump the player, then show it: the audio element lives in the
+                  // Episode panel and is only hidden, so the seek still applies.
+                  setSeekLineId(lineId)
+                  setTab('episode')
+                }}
+              />
             </div>
           </>
         )}

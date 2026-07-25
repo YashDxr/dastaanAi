@@ -70,13 +70,37 @@ def get_session() -> Iterator[Session]:
         yield session
 
 
+# Columns added after the first deploy. `create_all` creates missing *tables*
+# and silently ignores missing *columns* on tables that already exist, so a
+# column added later never reaches a database that has data in it. Postgres
+# supports `ADD COLUMN IF NOT EXISTS`, which makes replaying the whole list on
+# every boot both safe and cheap - far less machinery than Alembic for a schema
+# that only grows.
+_ADDED_COLUMNS: tuple[tuple[str, str, str], ...] = (
+    ("feedback", "status", "VARCHAR NOT NULL DEFAULT 'pending'"),
+    ("feedback", "error", "VARCHAR"),
+    ("cost_ledger", "cache_hit", "BOOLEAN NOT NULL DEFAULT FALSE"),
+)
+
+
+def _apply_column_migrations() -> None:
+    from sqlalchemy import text
+
+    with get_engine().begin() as connection:
+        for table, column, ddl in _ADDED_COLUMNS:
+            connection.execute(
+                text(f'ALTER TABLE "{table}" ADD COLUMN IF NOT EXISTS "{column}" {ddl}')
+            )
+
+
 def init_db() -> None:
-    """Create any missing tables.
+    """Create any missing tables, then backfill any columns added since.
 
     Idempotent and good enough for a hackathon; swap in Alembic if the schema
-    starts changing after data exists.
+    starts changing in ways that need real up/down migrations.
     """
     from . import models  # noqa: F401  (import registers the table metadata)
 
     SQLModel.metadata.create_all(get_engine())
+    _apply_column_migrations()
     log.info("schema_ready")

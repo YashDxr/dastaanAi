@@ -10,14 +10,14 @@ from daastaan_common.models import (
     AdminSetting,
     AuditLog,
     CostLedger,
-    PipelineRun,
     Story,
     User,
 )
 from daastaan_contracts import StoryStatus, UserRole
 from fastapi import APIRouter, Depends, HTTPException, status
-from sqlmodel import func, select
+from sqlmodel import col, func, select
 
+from .. import analytics
 from ..deps import AdminUser, SessionDep, require_admin
 from ..guards import audit, budget_cap_usd, total_spend_usd
 from ..schemas import (
@@ -26,8 +26,12 @@ from ..schemas import (
     CostRow,
     CostSummaryOut,
     RoleUpdate,
+    RunDetailOut,
+    RunSummaryOut,
     StoryOut,
+    UserCostDetailOut,
     UserOut,
+    UserSummaryOut,
 )
 
 router = APIRouter(prefix="/admin", tags=["admin"], dependencies=[Depends(require_admin)])
@@ -97,18 +101,35 @@ def cost_summary(session: SessionDep) -> CostSummaryOut:
 
     spent = total_spend_usd(session)
     cap = budget_cap_usd(session)
+    hits = int(
+        session.exec(
+            select(func.count()).select_from(CostLedger).where(col(CostLedger.cache_hit))
+        ).one()
+    )
     return CostSummaryOut(
         total_usd=round(spent, 4),
         budget_cap_usd=cap,
         remaining_usd=round(cap - spent, 4),
+        cache_savings_usd=round(analytics.estimate_cache_savings(session), 4),
+        cache_hits=hits,
         by_stage=rollup(CostLedger.stage),
         by_model=rollup(CostLedger.model),
     )
 
 
-@router.get("/users", response_model=list[UserOut])
-def list_users(session: SessionDep) -> list[User]:
-    return list(session.exec(select(User).order_by(User.created_at)).all())
+@router.get("/users", response_model=list[UserSummaryOut])
+def list_users(session: SessionDep) -> list[UserSummaryOut]:
+    """Accounts with what each has spent, so a runaway user is visible from the
+    list rather than only after drilling in."""
+    return [UserSummaryOut.model_validate(row) for row in analytics.user_summaries(session)]
+
+
+@router.get("/users/{user_id}/costs", response_model=UserCostDetailOut)
+def user_costs(user_id: str, session: SessionDep) -> UserCostDetailOut:
+    detail = analytics.user_cost_detail(session, user_id)
+    if detail is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "user not found")
+    return UserCostDetailOut.model_validate(detail)
 
 
 @router.put("/users/{user_id}/role", response_model=UserOut)
@@ -150,14 +171,28 @@ def flag_story(story_id: str, session: SessionDep, admin: AdminUser) -> Story:
     return story
 
 
-@router.get("/runs")
-def list_runs(session: SessionDep, failed_only: bool = False) -> list[PipelineRun]:
-    """Doubles as the debugging tool during the build: every failed run with its
-    error and a trace id to open in Langfuse or MLflow."""
-    query = select(PipelineRun).order_by(PipelineRun.started_at.desc()).limit(100)
-    if failed_only:
-        query = query.where(PipelineRun.status == "failed")
-    return list(session.exec(query).all())
+@router.get("/runs", response_model=list[RunSummaryOut])
+def list_runs(
+    session: SessionDep, failed_only: bool = False, limit: int = analytics.MAX_RUNS
+) -> list[RunSummaryOut]:
+    """Every pipeline execution, newest first.
+
+    A run is a `StoryVersion` rolled up from the `jobs` and `cost_ledger` rows it
+    produced. The `pipeline_runs` table this used to read is never written to by
+    anything, which is why the tab was always empty.
+    """
+    return [
+        RunSummaryOut.model_validate(row)
+        for row in analytics.run_summaries(session, limit=limit, failed_only=failed_only)
+    ]
+
+
+@router.get("/runs/{version_id}", response_model=RunDetailOut)
+def get_run(version_id: str, session: SessionDep) -> RunDetailOut:
+    detail = analytics.run_detail(session, version_id)
+    if detail is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "run not found")
+    return RunDetailOut.model_validate(detail)
 
 
 @router.get("/audit")

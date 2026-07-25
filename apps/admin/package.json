@@ -12,7 +12,8 @@
   "dependencies": {
     "@daastaan/api-types": "*",
     "react": "^19.2.7",
-    "react-dom": "^19.2.7"
+    "react-dom": "^19.2.7",
+    "recharts": "^3.10.0"
   },
   "devDependencies": {
     "@types/node": "^24.13.2",

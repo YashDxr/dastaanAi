@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import TypeVar
 
 import structlog
-from daastaan_common import get_settings
+from daastaan_common import cache, get_settings
 from daastaan_common.models import AdminSetting, CostLedger
 from openai import (
     APIConnectionError,
@@ -30,7 +30,7 @@ from openai import (
     PermissionDeniedError,
     RateLimitError,
 )
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 from sqlmodel import Session
 from tenacity import retry, retry_if_exception, stop_after_attempt, wait_exponential
 
@@ -43,6 +43,10 @@ log = structlog.get_logger(__name__)
 T = TypeVar("T", bound=BaseModel)
 
 MODEL_OVERRIDE_KEY = "models"
+
+# Part of the image cache key, so raising it later cannot serve cheaper artwork
+# generated under the old setting.
+IMAGE_QUALITY = "medium"
 
 # A bad API key, a malformed request, or a content refusal will fail identically
 # on every attempt. Retrying them burns a minute of wall clock and buries the
@@ -84,11 +88,19 @@ class ModelGateway:
         stage: str,
         version_id: str | None = None,
         user_id: str | None = None,
+        bypass_cache: bool = False,
     ) -> None:
         self.session = session
         self.stage = stage
         self.version_id = version_id
         self.user_id = user_id
+        # Set for every stage a regeneration re-runs. Those stages were chosen
+        # precisely because the user wants a different result, and some of them
+        # send byte-identical inputs - a line respeak reaches `speech` with the
+        # same text, voice and instructions - so a read-through cache would hand
+        # back the exact take being replaced and the regeneration would appear to
+        # do nothing at all.
+        self.bypass_cache = bypass_cache
         self.settings = get_settings()
         self.client = OpenAI(api_key=self.settings.openai_api_key)
 
@@ -122,6 +134,7 @@ class ModelGateway:
         output_tokens: int = 0,
         unit_count: float = 0.0,
         is_estimated: bool = False,
+        cache_hit: bool = False,
     ) -> None:
         self.session.add(
             CostLedger(
@@ -134,16 +147,31 @@ class ModelGateway:
                 unit_count=unit_count,
                 cost_usd=cost_usd,
                 is_estimated=is_estimated,
+                cache_hit=cache_hit,
             )
         )
         self.session.commit()
         log.info(
-            "paid_call",
+            "cached_call" if cache_hit else "paid_call",
             stage=self.stage,
             model=model,
             cost_usd=round(cost_usd, 5),
             estimated=is_estimated,
         )
+
+    def _record_cache_hit(self, *, model: str, unit_count: float = 0.0) -> None:
+        """A hit still writes a ledger row, at zero cost.
+
+        Dropping the row would make the saving invisible: spend would simply be
+        lower with nothing to attribute it to. With the row present the admin
+        console can report how many calls the cache avoided.
+        """
+        self._record(model=model, cost_usd=0.0, unit_count=unit_count, cache_hit=True)
+
+    # --- cache ------------------------------------------------------------
+
+    def _cache_reads_enabled(self) -> bool:
+        return cache.enabled() and not self.bypass_cache
 
     # --- calls ------------------------------------------------------------
 
@@ -164,6 +192,23 @@ class ModelGateway:
         ever interpolated into the instruction string.
         """
         model = self._resolve_model(kind)
+        # The schema is part of the key, so tightening a model's fields
+        # invalidates its old entries instead of failing to parse them.
+        key = cache.digest(
+            "llm", model, temperature, system, user_content, schema.model_json_schema()
+        )
+
+        if self._cache_reads_enabled():
+            hit = cache.get_llm(key)
+            if hit is not None:
+                try:
+                    parsed_hit = schema.model_validate(hit)
+                except ValidationError:
+                    log.warning("cache_entry_unusable", stage=self.stage, model=model)
+                else:
+                    self._record_cache_hit(model=model)
+                    return parsed_hit
+
         with langfuse_span(
             name=f"structured:{self.stage}",
             metadata=trace_metadata(stage=self.stage, model=model),
@@ -197,6 +242,8 @@ class ModelGateway:
         parsed = completion.choices[0].message.parsed
         if parsed is None:
             raise ValueError(f"model returned no parseable output for stage {self.stage}")
+
+        cache.put_llm(key, parsed.model_dump(mode="json"))
         return parsed
 
     @_RETRY
@@ -223,6 +270,17 @@ class ModelGateway:
         reason to move uncompressed audio around.
         """
         model = self._resolve_model("tts")
+        key = cache.digest("tts", model, voice, text, instructions)
+
+        if self._cache_reads_enabled():
+            hit = cache.get_tts(key)
+            if hit is not None:
+                audio = cache.read_blob(hit)
+                if audio is not None:
+                    duration_ms = int(hit.meta.get("duration_ms") or 0) or probe_duration_ms(audio)
+                    self._record_cache_hit(model=model, unit_count=duration_ms / 1000)
+                    return audio, duration_ms
+
         with langfuse_span(
             name=f"speech:{self.stage}",
             metadata=trace_metadata(stage=self.stage, model=model),
@@ -242,23 +300,34 @@ class ModelGateway:
                 model=model,
                 cost_usd=cost,
                 unit_count=duration_ms / 1000,
-                is_estimated=True,
+                is_estimated=True,  # the speech endpoint returns no usage object
             )
             span.update(metadata=trace_metadata(
                 stage=self.stage, model=model,
                 duration_ms=duration_ms, cost_usd=cost,
             ))
+        cache.put_tts(key, data=audio, duration_ms=duration_ms)
         return audio, duration_ms
 
     @_RETRY
     def image(self, *, prompt: str, size: str = "1024x1024") -> bytes:
         model = self._resolve_model("image")
+        key = cache.digest("image", model, prompt, size, IMAGE_QUALITY)
+
+        if self._cache_reads_enabled():
+            hit = cache.get_image(key)
+            if hit is not None:
+                image = cache.read_blob(hit)
+                if image is not None:
+                    self._record_cache_hit(model=model, unit_count=1)
+                    return image
+
         with langfuse_span(
             name=f"image:{self.stage}",
             metadata=trace_metadata(stage=self.stage, model=model),
         ) as span:
             response = self.client.images.generate(
-                model=model, prompt=prompt, size=size, n=1, quality="medium"  # type: ignore[arg-type]
+                model=model, prompt=prompt, size=size, n=1, quality=IMAGE_QUALITY  # type: ignore[arg-type]
             )
             payload = response.data[0].b64_json
             if not payload:
@@ -269,7 +338,9 @@ class ModelGateway:
             span.update(metadata=trace_metadata(
                 stage=self.stage, model=model, cost_usd=cost,
             ))
-        return base64.b64decode(payload)
+        image = base64.b64decode(payload)
+        cache.put_image(key, data=image)
+        return image
 
 
 def write_temp(data: bytes, suffix: str) -> Path:

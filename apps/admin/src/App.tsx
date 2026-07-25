@@ -1,31 +1,11 @@
 import { ApiError, apiFetch } from '@daastaan/api-types'
 import { useCallback, useEffect, useState } from 'react'
 import './App.css'
-
-type User = { id: string; email: string; role: string }
-type CostRow = { label: string; calls: number; cost_usd: number; input_tokens?: number; output_tokens?: number }
-type CostSummary = {
-  total_usd: number
-  budget_cap_usd: number
-  remaining_usd: number
-  by_stage: CostRow[]
-  by_model: CostRow[]
-}
-type PipelineRun = {
-  id: string
-  version_id: string
-  status: string
-  error: string | null
-  langfuse_trace_id: string | null
-  mlflow_run_id: string | null
-  started_at: string
-}
-type AdminSetting = {
-  key: string
-  value: Record<string, unknown>
-  updated_by: string | null
-  updated_at: string
-}
+import { ChartCard, Donut, EmptyChart, HBar } from './charts'
+import type { AdminSetting, CostRow, CostSummary, User } from './types'
+import { formatUsd, prettyStage } from './types'
+import { RunsTab } from './views/RunsTab'
+import { UsersTab } from './views/UsersTab'
 
 type Tab = 'spend' | 'users' | 'runs' | 'settings'
 
@@ -39,19 +19,16 @@ export default function App() {
   const [user, setUser] = useState<User | null>(null)
   const [tab, setTab] = useState<Tab>('spend')
   const [costs, setCosts] = useState<CostSummary | null>(null)
-  const [users, setUsers] = useState<User[]>([])
-  const [runs, setRuns] = useState<PipelineRun[]>([])
   const [settings, setSettings] = useState<AdminSetting[]>([])
   const [error, setError] = useState<string | null>(null)
   const [boot, setBoot] = useState(true)
   const [authPending, setAuthPending] = useState(false)
 
+  // Runs and Users own their own fetching; only the simple tabs load here.
   const loadTab = useCallback(async (next: Tab) => {
     setError(null)
     try {
       if (next === 'spend') setCosts(await apiFetch<CostSummary>('/admin/costs'))
-      if (next === 'users') setUsers(await apiFetch<User[]>('/admin/users'))
-      if (next === 'runs') setRuns(await apiFetch<PipelineRun[]>('/admin/runs?failed_only=false'))
       if (next === 'settings') setSettings(await apiFetch<AdminSetting[]>('/admin/settings'))
     } catch (err) {
       setError(formatError(err))
@@ -190,8 +167,42 @@ export default function App() {
             <div className="meter">
               <div className="fill" style={{ width: `${Math.min(used, 100)}%` }} />
             </div>
-            <p className="muted">${costs.remaining_usd.toFixed(2)} remaining</p>
+            <p className="muted">
+              ${costs.remaining_usd.toFixed(2)} remaining
+              {costs.cache_hits > 0 &&
+                ` · cache avoided ${costs.cache_hits} calls, saving roughly ${formatUsd(
+                  costs.cache_savings_usd,
+                )}`}
+            </p>
           </section>
+
+          <div className="chart-grid">
+            <ChartCard title="Cost by stage">
+              {costs.by_stage.some((r) => r.cost_usd > 0) ? (
+                <HBar
+                  data={costs.by_stage
+                    .filter((r) => r.cost_usd > 0)
+                    .map((r) => ({ name: prettyStage(r.label), cost: r.cost_usd }))}
+                  valueKey="cost"
+                  kind="usd"
+                />
+              ) : (
+                <EmptyChart label="No spend recorded yet." />
+              )}
+            </ChartCard>
+            <ChartCard title="Cost by model">
+              {costs.by_model.some((r) => r.cost_usd > 0) ? (
+                <Donut
+                  data={costs.by_model
+                    .filter((r) => r.cost_usd > 0)
+                    .map((r) => ({ name: r.label, value: r.cost_usd }))}
+                />
+              ) : (
+                <EmptyChart label="No spend recorded yet." />
+              )}
+            </ChartCard>
+          </div>
+
           <section className="panel">
             <h2>By stage</h2>
             <CostTable rows={costs.by_stage} />
@@ -203,65 +214,9 @@ export default function App() {
         </>
       )}
 
-      {tab === 'users' && (
-        <section className="panel">
-          <h2>Accounts</h2>
-          <table>
-            <thead>
-              <tr>
-                <th>Email</th>
-                <th>Role</th>
-                <th></th>
-              </tr>
-            </thead>
-            <tbody>
-              {users.map((u) => (
-                <tr key={u.id}>
-                  <td>{u.email}</td>
-                  <td>{u.role}</td>
-                  <td>
-                    <select
-                      className="role-select"
-                      value={u.role}
-                      onChange={(e) => {
-                        const role = e.target.value
-                        void apiFetch(`/admin/users/${u.id}/role`, {
-                          method: 'PUT',
-                          body: JSON.stringify({ role }),
-                        })
-                          .then(() => loadTab('users'))
-                          .catch((err) => setError(formatError(err)))
-                      }}
-                    >
-                      <option value="user">user</option>
-                      <option value="admin">admin</option>
-                    </select>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </section>
-      )}
+      {tab === 'users' && <UsersTab onError={setError} />}
 
-      {tab === 'runs' && (
-        <section className="panel">
-          <h2>Recent pipeline runs</h2>
-          <ul className="stack-list">
-            {runs.map((run) => (
-              <li key={run.id}>
-                <strong>{run.version_id}</strong>
-                <span className={`badge ${run.status}`}>{run.status}</span>
-                <p className="muted">
-                  {new Date(run.started_at).toLocaleString()}
-                  {run.error ? ` · ${run.error}` : ''}
-                </p>
-              </li>
-            ))}
-            {!runs.length && <li className="muted">No runs yet.</li>}
-          </ul>
-        </section>
-      )}
+      {tab === 'runs' && <RunsTab onError={setError} />}
 
       {tab === 'settings' && (
         <section className="panel">
@@ -301,9 +256,9 @@ function CostTable({ rows }: { rows: CostRow[] }) {
       <tbody>
         {rows.map((row) => (
           <tr key={row.label}>
-            <td>{row.label}</td>
+            <td>{prettyStage(row.label)}</td>
             <td>{row.calls}</td>
-            <td>${row.cost_usd.toFixed(4)}</td>
+            <td>{formatUsd(row.cost_usd)}</td>
           </tr>
         ))}
         {!rows.length && (

@@ -1,5 +1,6 @@
 """Shared infrastructure for the Daastaan services."""
 
+from . import cache
 from .celery_app import celery_app, create_celery
 from .db import get_engine, get_session, init_db, session_scope
 from .logging import configure_logging
@@ -14,6 +15,7 @@ __all__ = [
     "REQUEST_ID_HEADER",
     "RequestIdMiddleware",
     "Settings",
+    "cache",
     "carry_over_assets",
     "celery_app",
     "configure_logging",

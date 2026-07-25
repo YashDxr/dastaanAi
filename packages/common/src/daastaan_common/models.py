@@ -17,6 +17,7 @@ from typing import Any
 
 from sqlalchemy import Column, UniqueConstraint
 from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.ext.mutable import MutableDict
 from sqlmodel import Field, SQLModel
 
 
@@ -29,7 +30,15 @@ def _now() -> datetime:
 
 
 def _json_column(nullable: bool = False) -> Column:
-    return Column(JSONB, nullable=nullable)
+    """A JSONB column that notices in-place edits.
+
+    Without `MutableDict`, SQLAlchemy compares the dict against itself on flush,
+    finds no change, and drops the write. Every `state_json["key"] = value` in
+    the codebase was silently discarded - including the `version_id` and `regen`
+    a forked version is stamped with - so regenerations wrote their output back
+    onto the parent version and never saw their own directive.
+    """
+    return Column(MutableDict.as_mutable(JSONB), nullable=nullable)
 
 
 class User(SQLModel, table=True):
@@ -115,12 +124,21 @@ class MediaAsset(SQLModel, table=True):
 
 
 class Feedback(SQLModel, table=True):
+    """One free-text note plus the outcome of interpreting it.
+
+    `status` and `error` exist because interpretation can fail on a decision
+    rather than an outage, and those failures roll the whole transaction back.
+    Without a durable outcome the user's note would simply vanish.
+    """
+
     __tablename__ = "feedback"
 
     id: str = Field(default_factory=_uuid, primary_key=True)
     version_id: str = Field(index=True)
     user_id: str = Field(foreign_key="users.id", index=True)
     raw_text: str
+    status: str = Field(default="pending", index=True)
+    error: str | None = None
     directive_json: dict[str, Any] | None = Field(
         default=None, sa_column=_json_column(nullable=True)
     )
@@ -144,6 +162,9 @@ class CostLedger(SQLModel, table=True):
     cost_usd: float = 0.0
     # TTS cost cannot be read back from the API, so it is derived from duration.
     is_estimated: bool = False
+    # A cache hit still writes a row, at zero cost. Dropping the row instead
+    # would make spend simply disappear; this way the saving is measurable.
+    cache_hit: bool = Field(default=False, index=True)
     created_at: datetime = Field(default_factory=_now, index=True)
 
 

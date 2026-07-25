@@ -64,7 +64,7 @@ async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONR
 
 
 for router in (health.router, auth.router, stories.router, feedback.router, media.router,
-               admin.router, studio.router):
+               admin.router, studio.router, progress.sse_router):
     app.include_router(router, prefix="/api")
 
 # WebSocket paths are not prefixed: the route already carries its own /ws prefix.
