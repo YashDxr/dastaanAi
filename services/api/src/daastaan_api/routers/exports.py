@@ -16,7 +16,7 @@ from fastapi import APIRouter, HTTPException, status
 from sqlmodel import select
 
 from ..deps import CurrentUser, OwnedStory, SessionDep
-from ..dispatch import dispatch_audio_export, dispatch_bgm_export
+from ..dispatch import dispatch_audio_export, dispatch_bgm_export, dispatch_video_export
 from ..schemas import ExportFormatOut, ExportOut, ExportRequest
 
 log = structlog.get_logger(__name__)
@@ -253,4 +253,117 @@ def create_bgm_export(
         )
 
     dispatch_bgm_export(version_id=version.id, user_id=user.id, fmt=body.format)
+    return ExportOut(format=body.format, ready=False, url=None, size_bytes=None)
+
+
+# ---------------------------------------------------------------------------
+# Video exports
+# ---------------------------------------------------------------------------
+
+# Kept in step with `daastaan_agent.assembly.VIDEO_EXPORTS`, plus the master, for
+# the same reason as FORMATS above: the API cannot import the agent package, so
+# the list is duplicated and the worker rejects anything it does not recognise.
+#
+# GIF is not offered. A full episode at a watchable frame rate runs to hundreds
+# of megabytes and still looks worse than the video it came from, so it would be
+# a slow encode nobody wants the result of. An audio-only extraction is missing
+# for a different reason: `/stories/{id}/exports` already offers exactly that,
+# from a master this video's AAC track was itself derived from.
+VIDEO_FORMATS: dict[str, dict[str, str]] = {
+    "mp4": {
+        "label": "MP4 (H.264)",
+        "content_type": "video/mp4",
+        "detail": "The original render, not re-encoded. Plays everywhere.",
+    },
+    "mov": {
+        "label": "MOV",
+        "content_type": "video/quicktime",
+        "detail": "Same picture and sound, rewrapped for Final Cut and iMovie. No quality loss.",
+    },
+    "mkv": {
+        "label": "MKV",
+        "content_type": "video/x-matroska",
+        "detail": "Same picture and sound in a container that holds anything. No quality loss.",
+    },
+    "webm": {
+        "label": "WebM (VP9)",
+        "content_type": "video/webm",
+        "detail": "Smaller at the same quality, for the web. Slow to prepare.",
+    },
+}
+
+VIDEO_RECOMMENDED = "mp4"
+
+
+def _video_assets(session, version_id: str) -> dict[str, MediaAsset]:
+    """Available video downloads by format.
+
+    MP4 answers for the master; every other entry is a stored remux or re-encode.
+    """
+    rows = session.exec(
+        select(MediaAsset).where(
+            MediaAsset.version_id == version_id,
+            MediaAsset.kind.in_([AssetKind.FINAL_VIDEO, AssetKind.VIDEO_EXPORT]),
+        )
+    ).all()
+
+    found: dict[str, MediaAsset] = {}
+    for asset in rows:
+        if asset.kind == AssetKind.FINAL_VIDEO:
+            found["mp4"] = asset
+        else:
+            found[asset.dedupe_key.rpartition(":")[2]] = asset
+    return found
+
+
+def _video_listing(session, version_id: str) -> list[ExportFormatOut]:
+    available = _video_assets(session, version_id)
+    return [
+        ExportFormatOut(
+            format=fmt,
+            label=meta["label"],
+            content_type=meta["content_type"],
+            detail=meta["detail"],
+            recommended=fmt == VIDEO_RECOMMENDED,
+            ready=fmt in available,
+            url=f"/api/media/{available[fmt].id}?download=1" if fmt in available else None,
+            size_bytes=available[fmt].size_bytes if fmt in available else None,
+        )
+        for fmt, meta in VIDEO_FORMATS.items()
+    ]
+
+
+@router.get("/{story_id}/video/exports", response_model=list[ExportFormatOut])
+def list_video_exports(story: OwnedStory, session: SessionDep) -> list[ExportFormatOut]:
+    version = _current_version(story, session)
+    return _video_listing(session, version.id)
+
+
+@router.post("/{story_id}/video/exports", response_model=ExportOut)
+def create_video_export(
+    story: OwnedStory, body: ExportRequest, session: SessionDep, user: CurrentUser
+) -> ExportOut:
+    if body.format not in VIDEO_FORMATS:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, f"unknown video format: {body.format}")
+
+    version = _current_version(story, session)
+    available = _video_assets(session, version.id)
+
+    if "mp4" not in available:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "this story has no video yet; render one first",
+        )
+
+    # MP4 resolves here off the final_video row, so the master is handed back
+    # without an encode - the same shortcut MP3 takes for the episode audio.
+    if asset := available.get(body.format):
+        return ExportOut(
+            format=body.format,
+            ready=True,
+            url=f"/api/media/{asset.id}?download=1",
+            size_bytes=asset.size_bytes,
+        )
+
+    dispatch_video_export(version_id=version.id, user_id=user.id, fmt=body.format)
     return ExportOut(format=body.format, ready=False, url=None, size_bytes=None)

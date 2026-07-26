@@ -15,12 +15,14 @@ pipeline partway through.
 import time
 from datetime import UTC, datetime, timedelta
 from math import ceil
+from subprocess import TimeoutExpired
 from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
 import redis as redis_lib
 import structlog
 from celery import chain, chord, group
+from celery.exceptions import SoftTimeLimitExceeded
 from daastaan_common import (
     carry_over_assets,
     celery_app,
@@ -74,6 +76,8 @@ from . import prompts, repo
 from .assembly import (
     AUDIO_EXPORTS,
     BGM_AUDIO_EXPORTS,
+    VIDEO_EXPORTS,
+    VIDEO_TIMEOUT_SECONDS,
     AssemblyError,
     Clip,
     SceneFrame,
@@ -83,6 +87,8 @@ from .assembly import (
     export_content_type,
     transcode,
     transcode_bgm,
+    transcode_video,
+    video_content_type,
 )
 
 # Safe to import eagerly: the module keeps pypdf, tesseract and PIL behind
@@ -138,6 +144,22 @@ INGEST_RETRY_KWARGS: dict[str, Any] = {
     **RETRY_KWARGS,
     "max_retries": 1,
     "dont_autoretry_for": (*RETRY_KWARGS["dont_autoretry_for"], ExtractionError),
+}
+
+
+# A VP9 encode of a whole episode is minutes of CPU, so the video export needs a
+# ceiling of its own - the 900s in `celery_app` would kill a legitimate encode
+# about halfway through `assembly.VIDEO_TIMEOUT_SECONDS`. Raising it makes the
+# two timeouts reachable that were previously unreachable, and both are terminal:
+# an encode that ran out of time will take exactly as long on the fourth attempt,
+# so retrying it only spends the assembly pool's single slot four times over.
+VIDEO_EXPORT_RETRY_KWARGS: dict[str, Any] = {
+    **RETRY_KWARGS,
+    "dont_autoretry_for": (
+        *RETRY_KWARGS["dont_autoretry_for"],
+        SoftTimeLimitExceeded,
+        TimeoutExpired,
+    ),
 }
 
 # How much of a document is screened by moderation, and how much reaches the
@@ -1758,6 +1780,76 @@ def export_bgm(self, version_id: str, user_id: str, fmt: str) -> str:  # type: i
         asset_id = asset.id
 
     log.info("bgm_export_ready", version_id=version_id, fmt=fmt, bytes=len(data))
+    return asset_id
+
+
+# --- video export ----------------------------------------------------------
+
+
+@celery_app.task(
+    name=TaskName.EXPORT_VIDEO.value,
+    bind=True,
+    # Both sit above the ffmpeg timeout so the subprocess gives up first and
+    # reports which format failed, rather than the worker being shot mid-encode
+    # with nothing in the log to say what it was doing.
+    soft_time_limit=VIDEO_TIMEOUT_SECONDS + 60,
+    time_limit=VIDEO_TIMEOUT_SECONDS + 120,
+    **VIDEO_EXPORT_RETRY_KWARGS,
+)
+def export_video(self, version_id: str, user_id: str, fmt: str) -> str:  # type: ignore[no-untyped-def]
+    """Repackage the finished video into a downloadable format.
+
+    MOV and MKV are remuxes of the master's own H.264/AAC streams, so they are
+    bit-identical picture and sound in another wrapper. WebM is the one genuine
+    re-encode here, and it is minutes of CPU rather than seconds - which is why
+    this runs on the assembly pool, where concurrency is 1 and a long encode
+    cannot starve the media workers, and why the task overrides the global
+    Celery time limit that would otherwise cut it short.
+
+    MP4 is never transcoded; callers serve the stored final_video asset directly,
+    the same shortcut MP3 takes for the episode and WAV for the music bed.
+    """
+    if fmt not in VIDEO_EXPORTS:
+        raise ValueError(f"unsupported video export format: {fmt}")
+
+    dedupe = f"{AssetKind.VIDEO_EXPORT.value}:{fmt}"
+
+    with session_scope() as session:
+        if existing := repo.find_asset(session, version_id=version_id, dedupe_key=dedupe):
+            log.info("video_export_cached", version_id=version_id, fmt=fmt)
+            return existing.id
+
+        master = session.exec(
+            select(MediaAsset).where(
+                MediaAsset.version_id == version_id,
+                MediaAsset.kind == AssetKind.FINAL_VIDEO,
+            )
+        ).first()
+        if master is None:
+            raise LookupError(f"no final video for version {version_id}")
+        master_key, duration_ms = master.object_key, master.duration_ms
+
+    store = get_store()
+    data = transcode_video(store.get(master_key), fmt)
+    key = ids.object_key(version_id, AssetKind.VIDEO_EXPORT, ext=fmt)
+    content_type = video_content_type(fmt)
+    store.put(key, data, content_type)
+
+    with session_scope() as session:
+        asset = repo.record_asset(
+            session,
+            version_id=version_id,
+            kind=AssetKind.VIDEO_EXPORT,
+            dedupe_key=dedupe,
+            object_key=key,
+            content_type=content_type,
+            size_bytes=len(data),
+            duration_ms=duration_ms,
+        )
+        session.commit()
+        asset_id = asset.id
+
+    log.info("video_export_ready", version_id=version_id, fmt=fmt, bytes=len(data))
     return asset_id
 
 
