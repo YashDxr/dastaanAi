@@ -8,6 +8,7 @@ import { FeedbackComposer } from '../components/FeedbackComposer'
 import { ConsistencyPanel } from '../components/ConsistencyPanel'
 import { ProgressStepper } from '../components/ProgressStepper'
 import { ScenePanel } from '../components/ScenePanel'
+import { ListenerTranscript } from '../components/ListenerTranscript'
 import { ScriptPanel } from '../components/ScriptPanel'
 import { CharacterAvatar } from '../components/CharacterAvatar'
 import { VideoEditor } from '../components/editor/VideoEditor'
@@ -362,6 +363,12 @@ export function Studio({ user, storyId, tab, onTab, onLogout, onHome, onCompose 
                 ) : wantsVideo ? (
                   <VideoPlayerEmpty regenerating={regenerating} />
                 ) : null}
+                <ListenerTranscript
+                  lines={state?.lines ?? []}
+                  assets={playerAssets}
+                  activeLineId={activeLineId}
+                  onSeekToLine={setSeekLineId}
+                />
                 {state?.arc_summary && (
                   <section className="arc-panel">
                     <p className="eyebrow">Arc</p>
