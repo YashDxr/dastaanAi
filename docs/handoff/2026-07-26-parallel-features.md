@@ -1,161 +1,91 @@
 # Handoff: parallel feature branches started by Claude Code (2026-07-26)
 
-Claude Code was running several features in parallel (one git worktree per
-feature) when it hit a usage limit. All in-progress work has been committed
-and pushed to `origin` as separate branches so it can be picked up on any
-machine. Nothing has been merged into `dev`.
+**Status: resolved.** All five in-progress branches have been merged into
+`dev`, the known bugs are fixed, and the web workspace builds clean. This file
+is kept as the record of what changed and why, since several branches did not
+land exactly as they were written.
 
-## How to resume on another machine
-
-```bash
-git fetch origin
-git worktree add ../worktrees/<name> <branch>   # or just `git checkout <branch>` in a fresh clone
-cd apps/web && npm install
-```
-
-Each branch below is self-contained and branches from `dev` @ `20d8022`
-("chore: ui fixes"), so diffing against `dev` shows exactly what each one adds.
+Every branch forked from `dev` @ `20d8022` ("chore: ui fixes"). The three
+already-finished branches noted at the bottom of the original handoff
+(`feat/audio-sync`, `feat/character-avatars`, `feat/multilingual-ingest`) were
+already in `dev` and needed no action.
 
 ---
 
-### `feat/director-controls`
-Commit: `6c315b5` — "feat: add director controls for regenerating scenes/lines with tone and mood adjustments"
+## What landed
 
-New `apps/web/src/components/DirectorControls.tsx`, wired into `Studio.tsx`
-below the existing player/video panels. Lets a user pick a scope (line /
-character / scene / music / whole episode), a target, and tone sliders or
-mood/tone chips, builds a natural-language `instruction_delta`, and calls the
-existing `storiesApi.regenerate()` endpoint (same one `FeedbackComposer`,
-`AlternateEndings`, and `respeakLine`/`branchFromScene` in `Studio.tsx`
-already use).
+### `feat/streaming-thinking-copy` — merged as-is
+`StreamingActivity` now shows a stage-specific line ("Casting a voice for each
+character") instead of a raw token counter while a stage is running but has
+nothing to show yet. No changes were needed.
 
-**Known bug to fix before this is usable:** the `SCOPE_STAGE` map sends the
-wrong `target_stage` for the `scene` scope:
+### `feat/library-ux` — merged, one bug fixed
+Library search, sort, filter chips with live counts, `localStorage`-backed
+favorites, status dots and relative timestamps, all as described.
 
-```ts
-const SCOPE_STAGE: Record<Scope, string> = {
-  line: 'tts_synthesis',
-  character: 'voice_assignment',
-  scene: 'emotion_tagging',      // <- invalid entry point, will raise on the backend
-  music: 'music_generation',
-  full_story: 'story_understanding',
-}
-```
+Fixed: the favorite star was a `<button>` rendered inside the `story-row`
+`<button>`. Nested interactive elements are invalid HTML and the browser
+splits the nesting, which would have broken both the row click and the star.
+The star is now a sibling, absolutely positioned over the row
+(`.story-row-wrap`), and `toggleFavorite` no longer needs to stop propagation.
 
-Per `packages/contracts/src/daastaan_contracts/stages.py`
-(`SCOPE_ENTRY_POINTS`), `Scope.SCENE` only accepts `IMAGE_GENERATION` or
-`STORY_UNDERSTANDING` as an entry stage — not `EMOTION_TAGGING`. Sending
-`emotion_tagging` for a `scene` scope will fail `is_valid_entry()` and
-raise a `ValueError` on the backend (`plan_stages`). Fix by changing that
-line to `scene: 'story_understanding'` (matches what `branchFromScene`
-already does in `Studio.tsx`), or `'image_generation'` if the intent is a
-lighter-weight re-render.
+### `feat/listener-player` — merged, transcript folded into `ScriptPanel`
+The playback speed control (0.75x–2x) landed on `AudioPlayer` as written, plus
+one addition: the rate is reapplied on `loadedmetadata`, because loading a new
+source resets it and a rebuilt mix would silently drop back to 1x mid-episode.
 
-Otherwise CSS-only additions in `App.css` (`.director-controls`, `.dc-*`),
-no backend changes needed — the API already supports this shape.
+`ListenerTranscript.tsx` was **not** kept. This is the duplication the original
+handoff flagged against `feat/audio-sync`: `ScriptPanel` on `dev` already
+highlights the active line, auto-scrolls to it, pauses auto-scroll for 4s after
+a manual scroll, and seeks on click — the same four behaviours, implemented the
+same way. Mounting both would have stacked two scrolling copies of the same
+lines in one column.
 
----
+Its one genuine addition, the scene chapter divider, moved into `ScriptPanel`,
+which already receives `scenes`. That also resolves the rough edge in the
+original note: the divider reads "Scene 2: The Chase" rather than a UUID
+fragment. CSS moved from `.listener-chapter` to `.script-chapter`; the rest of
+the `.listener-*` rules were dropped with the component.
 
-### `feat/library-ux`
-Commit: `5fe7ba2` — "feat: add library search, status filters, sorting, and favorites"
+### `feat/director-controls` — merged, entry-point bug fixed
+Fixed: `SCOPE_STAGE.scene` was `emotion_tagging`, which is not in
+`SCOPE_ENTRY_POINTS[Scope.SCENE]` (`packages/contracts/.../stages.py`), so
+`plan_stages` would have raised on every scene-scoped regeneration. It is now
+`story_understanding`, matching `branchFromScene` in `Studio.tsx`.
 
-Rewrites the toolbar of `apps/web/src/views/Library.tsx`: free-text search
-over titles, a sort dropdown (newest/oldest/A–Z), filter chips (All / Ready /
-In Progress / Needs Attention / Favorites) with live counts, a star-toggle
-"favorite" button per story persisted to `localStorage` under
-`daastaan:favorites`, status dots, and relative timestamps
-("3 days ago") replacing the old absolute date.
+Because a scene therefore re-enters at the top of the pipeline and
+`SCOPE_AFFECTED_STAGES[Scope.SCENE]` is the full stage list, the scene copy was
+corrected to match what actually runs: the cost preview says the script,
+artwork and score are all rebuilt, and the generated instruction reads "Rework
+this scene with…" rather than "Deliver this scene with…", which described the
+`emotion_tagging` path that never existed.
 
-This one looks feature-complete and frontend-only — no backend or type
-changes required. Good candidate to review/merge as-is after a smoke test.
+### `feat/scene-ambience` — merged, styled and wired up
+`AmbiencePanel` is mounted under the scene gallery in the Scenes tab, which is
+where scene-level sound design belongs, and is only rendered once scenes exist.
+The missing styles (`.ambience-*`, `.sound-mode-selector`,
+`.soundscape-timeline*`, `.coming-soon`) were written; timeline block widths
+come from the inline `flex-basis` the component computes, so the strip stays
+proportional to scene length.
 
----
-
-### `feat/listener-player`
-Commit: `673056e` — "feat: add listener transcript with synced highlighting and playback speed control"
-
-Two independent additions:
-1. **Playback speed control** in `apps/web/src/components/AudioPlayer.tsx`:
-   buttons for 0.75x/1x/1.25x/1.5x/2x, sets `audio.playbackRate`.
-2. **New `ListenerTranscript.tsx`** component wired into `Studio.tsx`: shows
-   the full script, highlights the currently-playing line
-   (`activeLineId` prop), auto-scrolls to it, pauses auto-scroll for 4s after
-   manual scrolling, and lets you click a line to seek
-   (`onSeekToLine` → `setSeekLineId` in `Studio.tsx`).
-
-**Rough edge to polish:** the scene "chapter" divider currently renders the
-raw scene UUID (`Scene: {line.scene_id.slice(0, 8)}`) instead of the scene's
-actual title. `Studio.tsx`/`StoryState` already has `state.scenes` with a
-`title` field — build a `sceneId -> title` lookup and pass it in, or pass
-`scenes` as a prop, so the divider reads e.g. "Scene 2: The Chase" instead of
-a hex fragment.
+The mix selector previously changed nothing when clicked. It now reports
+something real: each mode gets a description of what that mix contains
+(including whether a music bed has actually been generated), and the
+suggestion list dims under "Narration Only", since that mix would not carry
+an ambience layer. "Full Atmosphere" stays disabled — there is still no
+backend for generating ambience audio, and the panel is explicitly labelled
+as planning-only.
 
 ---
 
-### `feat/scene-ambience`
-Commit: `7ac24be` — "feat: add ambience panel with scene-based sound design suggestions"
+## Verification
 
-New `apps/web/src/components/AmbiencePanel.tsx` only — **not yet imported
-anywhere**. It takes `scenes`, `lines`, `hasMusicBed` props and:
-- suggests an ambience type per scene from regex matches against
-  `scene.setting` / `scene.mood_tag` (ocean, forest, rain, city, cave, etc.)
-- renders a proportional "soundscape timeline" strip across all scenes
-- offers a `Narration Only` / `Narration + Score` / `Full Atmosphere`
-  mode selector (the third is marked `disabled` with a "Coming soon" note —
-  there's no backend support for actual ambience audio generation yet, this
-  is presentation-only/for planning)
+`npm run build --workspace @daastaan/web` (`tsc -b && vite build`) passes.
+`npm run lint --workspace @daastaan/web` reports no new errors; the single
+remaining error, `rules-of-hooks` in `views/Landing.tsx:123`, predates this
+work and is untouched by it.
 
-**Next step:** wire `<AmbiencePanel scenes={state.scenes} lines={state.lines}
-hasMusicBed={...} />` into `Studio.tsx` (no existing CSS classes for
-`.ambience-panel`, `.sound-mode-selector`, `.soundscape-timeline*`,
-`.ambience-scene*`, `.coming-soon` were added — those need to be written in
-`App.css` before this will look right, unlike the other three branches which
-already included their CSS).
-
----
-
-### `feat/streaming-thinking-copy`
-Commit: `2bcdaae` — "feat: show stage-specific thinking copy during streaming activity"
-
-Small, self-contained change to `apps/web/src/components/StreamingActivity.tsx`.
-Previously, while a pipeline stage was running but had no visible items yet,
-the UI just showed a live token counter ("1,234 tokens written"). This adds a
-`THINKING_COPY` map with a human-readable line per stage (e.g.
-"Casting a voice for each character" for `voice_assignment`) shown instead.
-This one was sitting as an uncommitted change directly on `dev` (not in its
-own worktree) — branched off before it could be lost. Straightforward to
-review and merge.
-
----
-
-## Already finished before the limit hit (no action needed)
-
-These were already fully committed and pushed by Claude Code — clean, no
-local changes were sitting around for them:
-
-- `feat/audio-sync` (`330a387`) — real-time audio-to-script sync with
-  highlighting and auto-scroll (overlaps conceptually with
-  `feat/listener-player`'s transcript — check for merge conflicts /
-  duplicated intent if landing both).
-- `feat/character-avatars` (`77a865a`) — character avatars with
-  role-based colors, integrated into the script view.
-- `feat/multilingual-ingest` (`945e188`) — propagates the language chosen in
-  Compose through the ingest pipeline into OCR.
-
-## Suggested order to land these
-
-1. `feat/streaming-thinking-copy` and `feat/library-ux` — smallest, no known
-   bugs, frontend-only.
-2. `feat/listener-player` — fix the scene-title divider, then merge. Compare
-   with `feat/audio-sync` first since both touch line-highlighting/transcript
-   territory.
-3. `feat/director-controls` — fix the `scene` → `emotion_tagging` bug above
-   before merging or even testing manually, otherwise the scene-scope option
-   will 500.
-4. `feat/scene-ambience` — needs its CSS written and to be wired into
-   `Studio.tsx` before it does anything visible; treat as the least finished
-   of the five.
-
-None of these branches were build/type-checked before the limit was hit —
-run `npm run build --workspace @daastaan/web` (or `npm run lint`) on each
-before opening a PR.
+Nothing here required a backend or contract change. Still worth a manual
+smoke test: the scene scope in Director Controls (the fix above is the only
+thing standing between it and a 500), the star toggle in Library, and the
+Scenes tab layout with the new panel.

@@ -429,7 +429,7 @@ export function Studio({ user, storyId, tab, onTab, onLogout, onHome, onCompose 
             </div>
 
             <div
-              className="scenes-panel"
+              className="scenes-tab"
               id="studio-panel-scenes"
               role="tabpanel"
               aria-labelledby="studio-tab-scenes"

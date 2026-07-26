@@ -1579,7 +1579,7 @@
 /* Sound design ----------------------------------------------------------- */
 
 /* `hidden` on the tabpanel has to keep winning over the flex display. */
-.scenes-panel:not([hidden]) {
+.scenes-tab:not([hidden]) {
   display: flex;
   flex-direction: column;
   gap: 1.25rem;
