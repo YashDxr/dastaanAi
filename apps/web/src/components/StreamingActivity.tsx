@@ -48,6 +48,22 @@ const COUNT_NOUNS: Record<string, [string, string]> = {
   image_generation: ['scene', 'scenes'],
 }
 
+/** What the user sees while a stage is thinking but has nothing visual to show yet. */
+const THINKING_COPY: Record<string, string> = {
+  mood_classification: 'Reading the mood and tone of your story',
+  story_understanding: 'Breaking the story into scenes',
+  character_registry: 'Figuring out who is in the story',
+  dialogue_attribution: 'Writing the script',
+  emotion_tagging: 'Marking each line with emotion and intensity',
+  narrator_persona: 'Choosing the narrator voice',
+  voice_assignment: 'Casting a voice for each character',
+  tts_synthesis: 'Recording audio',
+  image_generation: 'Painting artwork',
+  music_generation: 'Composing background music',
+  assembly: 'Stitching the episode together',
+  video_composition: 'Composing the video',
+}
+
 export function StreamingActivity({
   stage,
   label,
@@ -147,7 +163,7 @@ export function StreamingActivity({
         {visibleItems.length === 0 && (tokens ?? 0) > 0 && (
           <p className="stream-tokens">
             <span className="stream-cursor" aria-hidden />
-            {(tokens ?? 0).toLocaleString()} tokens written
+            {THINKING_COPY[stage ?? ''] ?? 'Working…'}
           </p>
         )}
 
