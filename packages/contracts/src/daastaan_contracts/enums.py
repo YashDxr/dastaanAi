@@ -139,6 +139,10 @@ class AssetKind(StrEnum):
     EPISODE_EXPORT = "episode_export"
     # A transcode of MUSIC_BED for download. Same pattern as EPISODE_EXPORT.
     BGM_EXPORT = "bgm_export"
+    # A transcode of FINAL_VIDEO for download. Same pattern as EPISODE_EXPORT:
+    # kept apart so the player always resolves the master and never picks up a
+    # WebM re-encode or a remux as the episode's own video.
+    VIDEO_EXPORT = "video_export"
     # A re-cut of the episode produced by the video editor. Kept apart from
     # FINAL_VIDEO so the studio player always resolves the pipeline's own master
     # and never picks up somebody's 9:16 social crop.

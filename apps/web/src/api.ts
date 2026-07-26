@@ -82,6 +82,12 @@ export const stories = {
       `/stories/${id}/bgm/exports`,
       { method: 'POST', body: JSON.stringify({ format }) },
     ),
+  videoExports: (id: string) => apiFetch<ExportFormat[]>(`/stories/${id}/video/exports`),
+  requestVideoExport: (id: string, format: string) =>
+    apiFetch<{ format: string; ready: boolean; url: string | null; size_bytes: number | null }>(
+      `/stories/${id}/video/exports`,
+      { method: 'POST', body: JSON.stringify({ format }) },
+    ),
   regenerate: (
     id: string,
     body: {

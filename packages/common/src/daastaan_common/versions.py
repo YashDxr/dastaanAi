@@ -34,6 +34,7 @@ _TERMINAL_ASSET_KINDS = {
     AssetKind.FINAL_EPISODE.value,
     AssetKind.FINAL_VIDEO.value,
     AssetKind.EPISODE_EXPORT.value,
+    AssetKind.VIDEO_EXPORT.value,
 }
 
 

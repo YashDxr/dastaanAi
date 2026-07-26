@@ -349,6 +349,7 @@ export function Studio({ user, storyId, tab, onTab, onLogout, onHome, onCompose 
                   seekLineId={seekLineId}
                   regenerating={regenerating}
                   hasMusicBed={hasMusicBed}
+                  hasVideo={!!finalVideo}
                   onSeekHandled={() => setSeekLineId(null)}
                   onActiveLineChange={setActiveLineId}
                 />

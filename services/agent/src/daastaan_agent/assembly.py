@@ -215,6 +215,46 @@ BGM_AUDIO_EXPORTS: dict[str, tuple[list[str], str, str]] = {
 BGM_MASTER_FORMAT = "wav"
 BGM_MASTER_CONTENT_TYPE = "audio/wav"
 
+# Video exports start from the pipeline's H.264/AAC MP4. Three of the four are
+# remuxes: the same encoded streams poured into another container, which costs no
+# quality and runs at disk speed. Only WebM is a real re-encode, and it is here
+# because VP9 is meaningfully smaller than H.264 at the same quality on the web.
+#
+# MP4 is absent for the same reason MP3 is absent from AUDIO_EXPORTS - it is the
+# master, and callers serve the stored asset directly.
+#
+# Deliberately not offered: GIF, because a whole episode at any watchable frame
+# rate runs to hundreds of megabytes and looks worse than the video it came from;
+# and an audio-only extraction, which would duplicate the episode audio exports
+# that already start from a better master than this video's AAC track.
+VIDEO_EXPORTS: dict[str, tuple[list[str], str, str]] = {
+    # `-c copy` remuxes. `+faststart` moves the index to the front so the file
+    # starts playing before it has finished downloading.
+    "mov": (["-c", "copy", "-movflags", "+faststart"], "mov", "video/quicktime"),
+    "mkv": (["-c", "copy"], "mkv", "video/x-matroska"),
+    # CRF 32 with `-b:v 0` is constant-quality VP9, which is the mode libvpx is
+    # tuned for; `row-mt` and `cpu-used 2` buy most of the available speed back
+    # without a visible cost at this bitrate.
+    "webm": (
+        [
+            "-c:v", "libvpx-vp9", "-crf", "32", "-b:v", "0",
+            "-row-mt", "1", "-deadline", "good", "-cpu-used", "2",
+            "-c:a", "libopus", "-b:a", "128k",
+        ],
+        "webm",
+        "video/webm",
+    ),
+}
+
+VIDEO_MASTER_FORMAT = "mp4"
+VIDEO_MASTER_CONTENT_TYPE = "video/mp4"
+
+# A whole episode through libvpx-vp9 is minutes of CPU, not seconds, so the 600s
+# that bounds an audio transcode would abort a legitimate encode. Matches the
+# budget `video_edit.RENDER_TIMEOUT_SECONDS` gives a full cut render, which is
+# strictly more work than re-encoding one finished MP4.
+VIDEO_TIMEOUT_SECONDS = 1800
+
 
 def export_content_type(fmt: str) -> str:
     if fmt == MASTER_FORMAT:
@@ -226,6 +266,12 @@ def bgm_content_type(fmt: str) -> str:
     if fmt == BGM_MASTER_FORMAT:
         return BGM_MASTER_CONTENT_TYPE
     return BGM_AUDIO_EXPORTS[fmt][2]
+
+
+def video_content_type(fmt: str) -> str:
+    if fmt == VIDEO_MASTER_FORMAT:
+        return VIDEO_MASTER_CONTENT_TYPE
+    return VIDEO_EXPORTS[fmt][2]
 
 
 def transcode(audio: bytes, fmt: str) -> bytes:
@@ -295,6 +341,47 @@ def transcode_bgm(audio: bytes, fmt: str) -> bytes:
 
         data = output.read_bytes()
         log.info("bgm_transcoded", fmt=fmt, source_bytes=len(audio), output_bytes=len(data))
+        return data
+
+
+def transcode_video(video: bytes, fmt: str) -> bytes:
+    """Repackage or re-encode the final video into a download format.
+
+    Same safety pattern as `transcode`: argv list, temp files this function
+    created, and `fmt` indexes a fixed table rather than reaching a command line,
+    so no caller can smuggle ffmpeg flags through it.
+
+    MP4 is not accepted because callers serve the stored `final_video` asset
+    directly. Re-encoding the master into itself would cost a generation of
+    quality and a great deal of CPU to produce a worse copy of a file we already
+    have.
+    """
+    if fmt not in VIDEO_EXPORTS:
+        raise AssemblyError(f"unsupported video export format: {fmt}")
+
+    codec_args, extension, _ = VIDEO_EXPORTS[fmt]
+
+    with tempfile.TemporaryDirectory(prefix="daastaan-vid-") as tmp:
+        workdir = Path(tmp)
+        source = workdir / f"master.{VIDEO_MASTER_FORMAT}"
+        source.write_bytes(video)
+        output = workdir / f"episode.{extension}"
+
+        command = [
+            ffmpeg_path(), "-hide_banner", "-loglevel", "error", "-y",
+            "-i", str(source),
+            *codec_args,
+            str(output),
+        ]
+        result = subprocess.run(  # noqa: S603
+            command, capture_output=True, text=True, timeout=VIDEO_TIMEOUT_SECONDS
+        )
+        if result.returncode != 0:
+            log.error("video_transcode_failed", fmt=fmt, stderr=result.stderr[-2000:])
+            raise AssemblyError(f"ffmpeg exited {result.returncode}: {result.stderr[-500:]}")
+
+        data = output.read_bytes()
+        log.info("video_transcoded", fmt=fmt, source_bytes=len(video), output_bytes=len(data))
         return data
 
 

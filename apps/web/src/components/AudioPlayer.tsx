@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { BgmPanel } from './BgmPanel'
 import { ExportPanel } from './ExportPanel'
+import { VideoExportPanel } from './VideoExportPanel'
 import type { Asset, DialogueLine } from '../types'
 
 const DOWNLOAD_ICON = (
@@ -55,6 +56,8 @@ type Props = {
   storyId?: string
   /** Show the BGM download option when a music bed has been generated. */
   hasMusicBed?: boolean
+  /** Show the video download option once the pipeline has rendered one. */
+  hasVideo?: boolean
 }
 
 function formatTime(seconds: number) {
@@ -95,6 +98,7 @@ export function AudioPlayer({
   regenerating = false,
   storyId,
   hasMusicBed = false,
+  hasVideo = false,
 }: Props) {
   const liveEpisode = useMemo(
     () => assets.find((a) => a.kind === 'final_episode') ?? null,
@@ -338,7 +342,14 @@ export function AudioPlayer({
           </div>
         </div>
       </div>
-      {storyId && <DownloadsSection storyId={storyId} episodeReady={!!liveEpisode} hasMusicBed={hasMusicBed} />}
+      {storyId && (
+        <DownloadsSection
+          storyId={storyId}
+          episodeReady={!!liveEpisode}
+          hasMusicBed={hasMusicBed}
+          hasVideo={hasVideo}
+        />
+      )}
     </section>
   )
 }
@@ -351,14 +362,16 @@ function DownloadsSection({
   storyId,
   episodeReady,
   hasMusicBed,
+  hasVideo,
 }: {
   storyId: string
   episodeReady: boolean
   hasMusicBed: boolean
+  hasVideo: boolean
 }) {
   const [open, setOpen] = useState(false)
 
-  if (!episodeReady && !hasMusicBed) return null
+  if (!episodeReady && !hasMusicBed && !hasVideo) return null
 
   return (
     <div className="downloads-section">
@@ -388,6 +401,13 @@ function DownloadsSection({
             <div className="download-group">
               <p className="download-group-heading">Background Score</p>
               <BgmPanel storyId={storyId} inline />
+            </div>
+          )}
+
+          {hasVideo && (
+            <div className="download-group">
+              <p className="download-group-heading">Episode Video</p>
+              <VideoExportPanel storyId={storyId} inline />
             </div>
           )}
         </div>
