@@ -103,10 +103,12 @@ and works across different networks.
 
 ### 4a. One-time setup on the music Mac (already done for this repo)
 
-Tailscale is installed and Serve is active. The sidecar URL for this Mac is:
+Tailscale is installed on the music Mac under the personal account
+`subramanya11rao@gmail.com` (not a work / webknot.in tailnet). Serve is active.
+The sidecar URL for this Mac is:
 
 ```
-https://subramanyas-macbook-air.tail70ba05.ts.net
+https://subramanyas-macbook-air.tail64d7ec.ts.net
 ```
 
 Steps taken (for reference / reproduction on a fresh Mac):
@@ -116,10 +118,11 @@ Steps taken (for reference / reproduction on a fresh Mac):
 brew install tailscale
 brew services start tailscale
 
-# Log in (opens browser)
+# Log in with the personal Gmail that owns this music tailnet
 tailscale up
 
 # Enable Tailscale Serve — proxies the loopback sidecar over private HTTPS
+# (first time: open the enable-Serve link Tailscale prints, then re-run)
 tailscale serve --bg --https=443 http://127.0.0.1:8787
 tailscale serve status
 ```
@@ -136,18 +139,21 @@ or any public load balancer for this service.
 
 ### 4b. Setup on the calling laptop (teammate's Mac)
 
-1. Install Tailscale and join the **same tailnet account**:
+1. Get an invite into the music Mac's personal tailnet (owner sends from
+   [Users → Invite](https://login.tailscale.com/admin/users) while logged in as
+   `subramanya11rao@gmail.com`). Install Tailscale and accept the invite with
+   **your own** Google/GitHub — you do not use the owner's password:
 
    ```bash
    brew install tailscale
    brew services start tailscale
-   tailscale up   # log in with the same account used on the music Mac
+   tailscale up   # accept invite / join the personal music tailnet
    ```
 
 2. Verify you can reach the sidecar:
 
    ```bash
-   curl -fsS https://subramanyas-macbook-air.tail70ba05.ts.net/healthz
+   curl -fsS https://subramanyas-macbook-air.tail64d7ec.ts.net/healthz
    # → {"status":"ok"}
    ```
 
@@ -155,7 +161,7 @@ or any public load balancer for this service.
 
    ```dotenv
    MUSIC_ENABLED=true
-   MUSIC_SERVICE_BASE_URL=https://subramanyas-macbook-air.tail70ba05.ts.net
+   MUSIC_SERVICE_BASE_URL=https://subramanyas-macbook-air.tail64d7ec.ts.net
    MUSIC_SERVICE_TIMEOUT_SECONDS=600
    MUSIC_SERVICE_POLL_INTERVAL_SECONDS=2
    MUSIC_DURATION_SECONDS=30
@@ -181,7 +187,7 @@ or any public load balancer for this service.
 
    ```bash
    docker compose exec worker-music curl -fsS \
-     https://subramanyas-macbook-air.tail70ba05.ts.net/healthz
+     https://subramanyas-macbook-air.tail64d7ec.ts.net/healthz
    # → {"status":"ok"}
    ```
 
