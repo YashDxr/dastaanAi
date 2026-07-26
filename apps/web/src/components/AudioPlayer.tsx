@@ -113,6 +113,7 @@ export function AudioPlayer({
   const [playing, setPlaying] = useState(false)
   const [current, setCurrent] = useState(0)
   const [duration, setDuration] = useState(0)
+  const [playbackRate, setPlaybackRate] = useState(1)
   // Non-null only while the user is dragging the scrubber. Holding the thumb
   // position here stops `timeupdate` from yanking it back under the cursor.
   const [scrub, setScrub] = useState<number | null>(null)
@@ -255,6 +256,9 @@ export function AudioPlayer({
         onLoadedMetadata={() => {
           const value = audioRef.current?.duration
           setDuration(Number.isFinite(value) ? (value as number) : 0)
+          // Loading a source resets the rate, so a rebuilt mix would silently
+          // drop back to 1x mid-episode without this.
+          if (audioRef.current) audioRef.current.playbackRate = playbackRate
           applyPendingSeek()
         }}
         onEnded={() => {
@@ -266,6 +270,7 @@ export function AudioPlayer({
         onPlay={() => {
           playingRef.current = true
           setPlaying(true)
+          if (audioRef.current) audioRef.current.playbackRate = playbackRate
         }}
         onPause={() => {
           playingRef.current = false
@@ -286,6 +291,22 @@ export function AudioPlayer({
         >
           {playing ? 'Pause' : 'Play'}
         </button>
+        <div className="speed-controls" role="group" aria-label="Playback speed">
+          {[0.75, 1, 1.25, 1.5, 2].map((rate) => (
+            <button
+              key={rate}
+              type="button"
+              className={`speed-btn${playbackRate === rate ? ' active' : ''}`}
+              aria-pressed={playbackRate === rate}
+              onClick={() => {
+                setPlaybackRate(rate)
+                if (audioRef.current) audioRef.current.playbackRate = rate
+              }}
+            >
+              {rate}x
+            </button>
+          ))}
+        </div>
         <div className="scrubber">
           <input
             type="range"

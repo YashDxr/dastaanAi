@@ -1,9 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { AppHeader } from '../components/AppHeader'
 import { AlternateEndings } from '../components/AlternateEndings'
+import { AmbiencePanel } from '../components/AmbiencePanel'
 import { AudioPlayer } from '../components/AudioPlayer'
 import { CliffhangerPanel } from '../components/CliffhangerPanel'
 import { VideoPlayer, VideoPlayerEmpty } from '../components/VideoPlayer'
+import { DirectorControls } from '../components/DirectorControls'
 import { FeedbackComposer } from '../components/FeedbackComposer'
 import { ConsistencyPanel } from '../components/ConsistencyPanel'
 import { ProgressStepper } from '../components/ProgressStepper'
@@ -388,6 +390,13 @@ export function Studio({ user, storyId, tab, onTab, onLogout, onHome, onCompose 
                     await refresh()
                   }}
                 />
+                <DirectorControls
+                  storyId={storyId}
+                  state={state ?? null}
+                  busy={busy}
+                  regenerating={regenerating}
+                  onRegenerated={refresh}
+                />
               </div>
 
               <aside className="studio-side">
@@ -420,6 +429,7 @@ export function Studio({ user, storyId, tab, onTab, onLogout, onHome, onCompose 
             </div>
 
             <div
+              className="scenes-tab"
               id="studio-panel-scenes"
               role="tabpanel"
               aria-labelledby="studio-tab-scenes"
@@ -435,6 +445,13 @@ export function Studio({ user, storyId, tab, onTab, onLogout, onHome, onCompose 
                   onTab('episode')
                 }}
               />
+              {scenes.length > 0 && (
+                <AmbiencePanel
+                  scenes={scenes}
+                  lines={state?.lines ?? []}
+                  hasMusicBed={hasMusicBed}
+                />
+              )}
             </div>
 
             <div

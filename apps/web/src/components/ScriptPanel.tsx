@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef } from 'react'
+import { Fragment, useEffect, useMemo, useRef } from 'react'
 import { CharacterAvatar } from './CharacterAvatar'
 import type { Character, DialogueLine, Scene } from '../types'
 
@@ -31,6 +31,8 @@ export function ScriptPanel({
     }
     return map
   }, [characters])
+
+  const sceneById = useMemo(() => new Map(scenes.map((s) => [s.id, s])), [scenes])
 
   const scrollRef = useRef<HTMLDivElement>(null)
   const lineRefs = useRef<Map<string, HTMLElement>>(new Map())
@@ -89,45 +91,52 @@ export function ScriptPanel({
         </div>
       </div>
       <div className="script-scroll" ref={scrollRef}>
-        {lines.map((line) => {
+        {lines.map((line, i) => {
           const char = charByIdOrName.get(line.character_id ?? '') ?? charByIdOrName.get(line.speaker)
           const isActive = line.id === activeLineId
+          const scene = line.scene_id !== lines[i - 1]?.scene_id ? sceneById.get(line.scene_id) : null
           return (
-            <article
-              key={line.id}
-              ref={(el) => {
-                if (el) lineRefs.current.set(line.id, el)
-                else lineRefs.current.delete(line.id)
-              }}
-              className={`script-line ${line.line_type}${isActive ? ' active' : ''}`}
-              onClick={() => onSeekLine?.(line.id)}
-              style={onSeekLine ? { cursor: 'pointer' } : undefined}
-            >
-              <div className="line-meta">
-                {char && <CharacterAvatar name={char.name} role={char.role} size="sm" imageUrl={avatarUrls?.get(char.id)} />}
-                <span className="speaker">{line.speaker}</span>
-                {line.emotion && (
-                  <span className="emotion">
-                    {line.emotion}
-                    {line.intensity ? ` · ${line.intensity}/5` : ''}
-                  </span>
-                )}
-              </div>
-              <p className="line-text">{line.text}</p>
-              {onRegenerateLine && (
-                <button
-                  type="button"
-                  className="line-action"
-                  disabled={busy}
-                  onClick={(e) => {
-                    e.stopPropagation()
-                    onRegenerateLine(line.id)
-                  }}
-                >
-                  Respeak line
-                </button>
+            <Fragment key={line.id}>
+              {scene && (
+                <div className="script-chapter">
+                  Scene {scene.index + 1}: {scene.title}
+                </div>
               )}
-            </article>
+              <article
+                ref={(el) => {
+                  if (el) lineRefs.current.set(line.id, el)
+                  else lineRefs.current.delete(line.id)
+                }}
+                className={`script-line ${line.line_type}${isActive ? ' active' : ''}`}
+                onClick={() => onSeekLine?.(line.id)}
+                style={onSeekLine ? { cursor: 'pointer' } : undefined}
+              >
+                <div className="line-meta">
+                  {char && <CharacterAvatar name={char.name} role={char.role} size="sm" imageUrl={avatarUrls?.get(char.id)} />}
+                  <span className="speaker">{line.speaker}</span>
+                  {line.emotion && (
+                    <span className="emotion">
+                      {line.emotion}
+                      {line.intensity ? ` · ${line.intensity}/5` : ''}
+                    </span>
+                  )}
+                </div>
+                <p className="line-text">{line.text}</p>
+                {onRegenerateLine && (
+                  <button
+                    type="button"
+                    className="line-action"
+                    disabled={busy}
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      onRegenerateLine(line.id)
+                    }}
+                  >
+                    Respeak line
+                  </button>
+                )}
+              </article>
+            </Fragment>
           )
         })}
       </div>
