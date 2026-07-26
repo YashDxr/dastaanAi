@@ -1,4 +1,4 @@
-from daastaan_common import carry_over_assets
+from daastaan_common import carry_over_assets, next_version_number, prepare_regeneration_state
 from daastaan_common.models import Job, MediaAsset, Story, StoryVersion
 from daastaan_contracts import (
     PIPELINE_STAGES,
@@ -41,6 +41,20 @@ def _asset_out(asset: MediaAsset) -> AssetOut:
         content_type=asset.content_type,
         duration_ms=asset.duration_ms,
         url=f"/api/media/{asset.id}",
+    )
+
+
+def _detail_out(story: Story, version: StoryVersion | None, session) -> StoryDetailOut:  # type: ignore[no-untyped-def]
+    assets = (
+        list(session.exec(select(MediaAsset).where(MediaAsset.version_id == version.id)).all())
+        if version
+        else []
+    )
+    return StoryDetailOut(
+        story=StoryOut.model_validate(story, from_attributes=True),
+        version=VersionOut.model_validate(version, from_attributes=True) if version else None,
+        state=version.state_json if version else None,
+        assets=[_asset_out(asset) for asset in assets],
     )
 
 
@@ -97,21 +111,7 @@ def get_story(story: OwnedStory, session: SessionDep) -> StoryDetailOut:
     version = (
         session.get(StoryVersion, story.current_version_id) if story.current_version_id else None
     )
-    assets = (
-        list(
-            session.exec(
-                select(MediaAsset).where(MediaAsset.version_id == version.id)
-            ).all()
-        )
-        if version
-        else []
-    )
-    return StoryDetailOut(
-        story=StoryOut.model_validate(story, from_attributes=True),
-        version=VersionOut.model_validate(version, from_attributes=True) if version else None,
-        state=version.state_json if version else None,
-        assets=[_asset_out(asset) for asset in assets],
-    )
+    return _detail_out(story, version, session)
 
 
 @router.get("/{story_id}/versions", response_model=list[VersionOut])
@@ -123,6 +123,22 @@ def list_versions(story: OwnedStory, session: SessionDep) -> list[StoryVersion]:
             .order_by(StoryVersion.version_number)
         ).all()
     )
+
+
+@router.get("/{story_id}/versions/{version_id}", response_model=StoryDetailOut)
+def get_version(
+    version_id: str, story: OwnedStory, session: SessionDep
+) -> StoryDetailOut:
+    """Load a historical version's immutable timeline for the Time Machine.
+
+    The story dependency has already checked ownership. The additional story-id
+    predicate prevents a caller who knows another version UUID from using this
+    route to read it or to make it a fork parent.
+    """
+    version = session.get(StoryVersion, version_id)
+    if version is None or version.story_id != story.id:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "story version not found")
+    return _detail_out(story, version, session)
 
 
 @router.get("/{story_id}/jobs", response_model=ProgressOut)
@@ -230,9 +246,29 @@ def regenerate(
     enforce_rate_limit(session, user.id, "regenerate", limits.RATE_LIMIT_REGENERATIONS)
     enforce_budget(session)
 
-    parent = session.get(StoryVersion, story.current_version_id)
+    # Lock the mutable story pointer for the whole fork. A historic source can
+    # intentionally differ from the current version, but two writers must never
+    # both replace ``current_version_id`` based on the same stale snapshot.
+    story = _lock_story_for_regeneration(session, story.id)
+    if story.status == StoryStatus.GENERATING:
+        raise HTTPException(status.HTTP_409_CONFLICT, "story regeneration is already in progress")
+    if (
+        body.expected_current_version_id is not None
+        and body.expected_current_version_id != story.current_version_id
+    ):
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "story changed since this version was opened; refresh and try again",
+        )
+
+    parent_id = body.base_version_id or story.current_version_id
+    parent = session.get(StoryVersion, parent_id) if parent_id else None
     if parent is None:
         raise HTTPException(status.HTTP_409_CONFLICT, "story has no generated version yet")
+    if parent.story_id != story.id:
+        # Do not disclose whether an arbitrary version id exists in another
+        # story. The owned parent must always belong to this story.
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "story version not found")
 
     try:
         stages = plan_stages(Scope(body.scope), StageName(body.target_stage))
@@ -244,7 +280,7 @@ def regenerate(
     child = StoryVersion(
         story_id=story.id,
         parent_version_id=parent.id,
-        version_number=parent.version_number + 1,
+        version_number=next_version_number(session, story_id=story.id),
         genre=parent.genre,
         mood=parent.mood,
         state_json=dict(parent.state_json),
@@ -262,19 +298,21 @@ def regenerate(
         target_id=body.target_id,
     )
 
-    child.state_json["version_id"] = child.id
-    child.state_json["regen"] = {
-        "scope": body.scope.value,
-        "target_stage": body.target_stage.value,
-        "target_id": body.target_id,
-        "instruction_delta": body.instruction_delta,
-    }
+    child.state_json = prepare_regeneration_state(
+        parent.state_json,
+        child_version_id=child.id,
+        scope=Scope(body.scope),
+        target_stage=StageName(body.target_stage),
+        target_id=body.target_id,
+        instruction_delta=body.instruction_delta,
+    )
     story.current_version_id = child.id
     story.status = StoryStatus.GENERATING
 
     audit(session, actor_user_id=user.id, action="story.regenerate", target_type="story_version",
           target_id=child.id, metadata={"scope": body.scope.value,
-                                        "stage": body.target_stage.value})
+                                        "stage": body.target_stage.value,
+                                        "base_version_id": parent.id})
     session.commit()
 
     task_id = dispatch_regeneration(
@@ -292,6 +330,20 @@ def regenerate(
         stages=[stage.value for stage in stages],
         task_id=task_id,
     )
+
+
+def _lock_story_for_regeneration(session, story_id: str) -> Story:  # type: ignore[no-untyped-def]
+    """Return the latest story row while holding its write lock until commit."""
+    statement = (
+        select(Story)
+        .where(Story.id == story_id)
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    )
+    locked = session.exec(statement).one_or_none()
+    if locked is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "story not found")
+    return locked
 
 
 def _assert_target_exists(parent: StoryVersion, body: RegenerateRequest) -> None:

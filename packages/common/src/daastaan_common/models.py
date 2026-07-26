@@ -17,7 +17,7 @@ from typing import Any
 
 from sqlalchemy import Column, UniqueConstraint
 from sqlalchemy.dialects.postgresql import JSONB
-from sqlalchemy.ext.mutable import MutableDict
+from sqlalchemy.ext.mutable import MutableDict, MutableList
 from sqlmodel import Field, SQLModel
 
 
@@ -54,6 +54,11 @@ def _json_column(nullable: bool = False) -> Column:
     onto the parent version and never saw their own directive.
     """
     return Column(MutableDict.as_mutable(JSONB), nullable=nullable)
+
+
+def _json_list_column(nullable: bool = False) -> Column:
+    """JSONB list variant used by durable, structured review results."""
+    return Column(MutableList.as_mutable(JSONB), nullable=nullable)
 
 
 class User(SQLModel, table=True):
@@ -159,6 +164,47 @@ class Feedback(SQLModel, table=True):
     )
     resulting_version_id: str | None = Field(default=None, index=True)
     created_at: datetime = Field(default_factory=_now)
+
+
+class ConsistencyCheck(SQLModel, table=True):
+    """One read-only Plot Hole Hunter request against an immutable story version.
+
+    Results live outside ``StoryVersion.state_json`` so running a quality check
+    never changes the version that was checked. Keeping a short history also
+    makes a retry/audit possible after the listener closes the studio.
+    """
+
+    __tablename__ = "consistency_checks"
+
+    id: str = Field(default_factory=_uuid, primary_key=True)
+    story_id: str = Field(foreign_key="stories.id", index=True)
+    version_id: str = Field(foreign_key="story_versions.id", index=True)
+    user_id: str = Field(foreign_key="users.id", index=True)
+    status: str = Field(default="pending", index=True)
+    task_id: str | None = Field(default=None, index=True)
+    # A worker lease identifier, never exposed to clients. A redelivered task
+    # must atomically claim this before it can make a paid model call, and an
+    # old lease may not overwrite the result of a newer retry.
+    run_token: str | None = Field(default=None, index=True)
+    # ``version_id`` while the check is pending/running, then NULL once it is
+    # terminal.  The unique constraint turns a two-tab API race into one
+    # durable active check without preventing an audit history of completed
+    # reviews (Postgres and SQLite both permit multiple NULL values).
+    active_key: str | None = Field(default=None, index=True)
+    summary: str | None = None
+    findings_json: list[dict[str, Any]] = Field(
+        default_factory=list, sa_column=_json_list_column()
+    )
+    # This is always a short, public-safe status message; worker exceptions are
+    # logged privately and never persisted here verbatim.
+    error: str | None = None
+    created_at: datetime = Field(default_factory=_now, index=True)
+    started_at: datetime | None = None
+    finished_at: datetime | None = None
+
+    __table_args__ = (
+        UniqueConstraint("version_id", "active_key", name="uq_consistency_checks_active_version"),
+    )
 
 
 class CostLedger(SQLModel, table=True):

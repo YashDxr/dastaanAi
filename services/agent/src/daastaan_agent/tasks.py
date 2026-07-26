@@ -13,8 +13,10 @@ pipeline partway through.
 """
 
 import time
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
+from math import ceil
 from typing import TYPE_CHECKING, Any
+from uuid import uuid4
 
 import redis as redis_lib
 import structlog
@@ -26,9 +28,12 @@ from daastaan_common import (
     get_settings,
     get_store,
     ids,
+    next_version_number,
+    prepare_regeneration_state,
     session_scope,
 )
 from daastaan_common.models import (
+    ConsistencyCheck,
     Feedback,
     IngestJob,
     MediaAsset,
@@ -40,6 +45,7 @@ from daastaan_contracts import (
     AssetEvent,
     AssetKind,
     CompleteEvent,
+    ConsistencyCheckStatus,
     FeedbackEvent,
     FeedbackStatus,
     IngestStatus,
@@ -61,6 +67,7 @@ from daastaan_contracts import (
     plan_stages,
     timeline_duration_ms,
 )
+from sqlalchemy import and_, or_, update
 from sqlmodel import Session, select
 
 from . import prompts, repo
@@ -86,6 +93,7 @@ if TYPE_CHECKING:
     from .ingest import Extraction as IngestExtraction
 from openai import BadRequestError, OpenAIError
 
+from .consistency import review_story_consistency
 from .gateway import PERMANENT_FAILURES, ModelGateway, ModerationBlocked
 from .graph import run_agent_stages
 from .music import MusicServiceClient, MusicServiceError, build_music_brief
@@ -155,9 +163,17 @@ def _bypass_cache(state: StoryState) -> bool:
     return state.regen is not None
 
 
-def _mark_story(session: Any, story_id: str, status: StoryStatus) -> None:
+def _mark_story(
+    session: Any, story_id: str, version_id: str, status: StoryStatus
+) -> None:
+    """Update global story status only while this is still the active version.
+
+    Celery can finish/retry an older branch after a newer one becomes current.
+    Its completion must not flip the newer branch from generating to ready (or
+    failed) merely because both rows share a story id.
+    """
     story = session.get(Story, story_id)
-    if story:
+    if story and story.current_version_id == version_id:
         story.status = status
         session.add(story)
         session.commit()
@@ -288,7 +304,7 @@ def run_stage(self, version_id: str, stage_value: str, user_id: str) -> str:  # 
             repo.finish_job(session, job, status=JobStatus.FAILED, error=str(exc))
             # If all retries exhausted, mark the story as failed
             if self.request.retries >= self.max_retries:
-                _mark_story(session, state.story_id, StoryStatus.FAILED)
+                _mark_story(session, state.story_id, version_id, StoryStatus.FAILED)
                 log.error(
                     "stage_exhausted_retries",
                     stage=stage_value,
@@ -678,11 +694,11 @@ def assemble(self, version_id: str, user_id: str) -> str:  # type: ignore[no-unt
             if state.output_format in ("video", "both"):
                 compose_video_task.si(version_id, user_id).apply_async(queue=Queue.ASSEMBLY.value)
             else:
-                _mark_story(session, state.story_id, StoryStatus.READY)
+                _mark_story(session, state.story_id, version_id, StoryStatus.READY)
                 repo.publish(state.story_id, CompleteEvent(version_id=version_id))
         except Exception as exc:
             repo.finish_job(session, job, status=JobStatus.FAILED, error=str(exc))
-            _mark_story(session, state.story_id, StoryStatus.FAILED)
+            _mark_story(session, state.story_id, version_id, StoryStatus.FAILED)
             raise
     return version_id
 
@@ -702,7 +718,7 @@ def compose_video_task(self, version_id: str, user_id: str) -> str:  # type: ign
         try:
             if state.output_format not in ("video", "both"):
                 repo.finish_job(session, job, status=JobStatus.SKIPPED)
-                _mark_story(session, state.story_id, StoryStatus.READY)
+                _mark_story(session, state.story_id, version_id, StoryStatus.READY)
                 repo.publish(state.story_id, CompleteEvent(version_id=version_id))
                 return version_id
 
@@ -785,11 +801,11 @@ def compose_video_task(self, version_id: str, user_id: str) -> str:  # type: ign
             state.final_video_key = key
             repo.save_state(session, state)
             repo.finish_job(session, job, status=JobStatus.SUCCEEDED)
-            _mark_story(session, state.story_id, StoryStatus.READY)
+            _mark_story(session, state.story_id, version_id, StoryStatus.READY)
             repo.publish(state.story_id, CompleteEvent(version_id=version_id))
         except Exception as exc:
             repo.finish_job(session, job, status=JobStatus.FAILED, error=str(exc))
-            _mark_story(session, state.story_id, StoryStatus.FAILED)
+            _mark_story(session, state.story_id, version_id, StoryStatus.FAILED)
             raise
     return version_id
 
@@ -937,7 +953,7 @@ def _on_pipeline_error(version_id: str, user_id: str) -> None:
     """link_error callback: mark the story FAILED when any chained task fails."""
     with session_scope() as session:
         state = repo.load_state(session, version_id)
-        _mark_story(session, state.story_id, StoryStatus.FAILED)
+        _mark_story(session, state.story_id, version_id, StoryStatus.FAILED)
 
 
 @celery_app.task(name="daastaan.pipeline.on_error", bind=True)
@@ -948,7 +964,7 @@ def pipeline_error_handler(self, request, exc, traceback, version_id: str = "", 
     with session_scope() as session:
         try:
             state = repo.load_state(session, version_id)
-            _mark_story(session, state.story_id, StoryStatus.FAILED)
+            _mark_story(session, state.story_id, version_id, StoryStatus.FAILED)
             log.error("chain_failed_marking_story", version_id=version_id, error=str(exc))
         except Exception:
             log.error("error_handler_failed", version_id=version_id, exc_info=True)
@@ -1023,7 +1039,7 @@ def run_pipeline(self, story_id: str, version_id: str, user_id: str) -> str:  # 
             error=str(exc),
         )
         with session_scope() as session:
-            _mark_story(session, story_id, StoryStatus.FAILED)
+            _mark_story(session, story_id, version_id, StoryStatus.FAILED)
             if pipeline_run:
                 try:
                     run = session.get(type(pipeline_run), pipeline_run.id)
@@ -1119,8 +1135,13 @@ def _fail_feedback(story_id: str, feedback_id: str, exc: Exception) -> None:
 
             story = session.get(Story, story_id)
             # Only undo the `generating` the API set for this request. If a
-            # regeneration is already running, leave it alone.
-            if story and story.status == StoryStatus.GENERATING:
+            # newer branch is now current, leave it alone.
+            if (
+                story
+                and feedback is not None
+                and story.current_version_id == feedback.version_id
+                and story.status == StoryStatus.GENERATING
+            ):
                 story.status = StoryStatus.READY
                 session.add(story)
             session.commit()
@@ -1200,46 +1221,59 @@ def _interpret_feedback(story_id: str, version_id: str, user_id: str, feedback_i
 
         target_id = _resolve_target(state, scope, directive.target_id)
 
+        # The feedback endpoint marks the story generating before dispatch, but
+        # an old/retried interpreter can still wake after a newer version wins.
+        # Lock and compare the pointer just before mutating it so it cannot
+        # resurrect a stale feedback branch.
+        story = session.exec(
+            select(Story)
+            .where(Story.id == story_id)
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        ).one_or_none()
+        if story is None or story.current_version_id != version_id:
+            raise ValueError("feedback was superseded by a newer story version")
+
         parent = session.get(StoryVersion, version_id)
+        if parent is None or parent.story_id != story_id:
+            raise LookupError(f"story version {version_id} not found")
         child = StoryVersion(
             story_id=story_id,
             parent_version_id=version_id,
-            version_number=(parent.version_number if parent else 1) + 1,
-            genre=parent.genre if parent else None,
-            mood=parent.mood if parent else None,
-            state_json=dict(parent.state_json) if parent else {},
+            version_number=next_version_number(session, story_id=story_id),
+            genre=parent.genre,
+            mood=parent.mood,
+            state_json=dict(parent.state_json),
             created_from_feedback_id=feedback_id,
         )
         session.add(child)
         session.flush()
 
-        if parent:
-            carry_over_assets(
-                session,
-                parent_version_id=parent.id,
-                child_version_id=child.id,
-                state=state,
-                scope=scope,
-                planned=planned,
-                target_id=target_id,
-            )
+        carry_over_assets(
+            session,
+            parent_version_id=parent.id,
+            child_version_id=child.id,
+            state=state,
+            scope=scope,
+            planned=planned,
+            target_id=target_id,
+        )
 
-        child.state_json["version_id"] = child.id
-        child.state_json["regen"] = {
-            "scope": scope.value,
-            "target_stage": target_stage.value,
-            "target_id": target_id,
-            "instruction_delta": directive.instruction_delta,
-        }
+        child.state_json = prepare_regeneration_state(
+            parent.state_json,
+            child_version_id=child.id,
+            scope=scope,
+            target_stage=target_stage,
+            target_id=target_id,
+            instruction_delta=directive.instruction_delta,
+        )
 
         feedback.directive_json = directive.model_dump()
         feedback.resulting_version_id = child.id
         feedback.status = FeedbackStatus.APPLIED
         feedback.error = None
-        story = session.get(Story, story_id)
-        if story:
-            story.current_version_id = child.id
-            story.status = StoryStatus.GENERATING
+        story.current_version_id = child.id
+        story.status = StoryStatus.GENERATING
         session.commit()
         new_version_id = child.id
 
@@ -1264,6 +1298,283 @@ def _interpret_feedback(story_id: str, version_id: str, user_id: str, feedback_i
         directive.instruction_delta,
     ).apply_async(queue=Queue.AGENTS.value)
     return new_version_id
+
+
+# --- Plot Hole Hunter ------------------------------------------------------
+
+
+_CONSISTENCY_FAILURE = "Consistency check could not be completed. Please try again."
+_CONSISTENCY_RETRYING = "Consistency check is retrying."
+# The generic Celery task hard limit is 15 minutes. A lease longer than that
+# means a live worker cannot be superseded, while a worker-lost task eventually
+# becomes reclaimable on redelivery instead of remaining "running" forever.
+_CONSISTENCY_LEASE = timedelta(minutes=20)
+_CONSISTENCY_LEASE_WAKEUP_BUFFER_SECONDS = 1
+
+
+def _as_utc(value: datetime) -> datetime:
+    """Normalise timestamps read from SQLite/Postgres before lease arithmetic."""
+    return value.replace(tzinfo=UTC) if value.tzinfo is None else value.astimezone(UTC)
+
+
+def _consistency_lease_wakeup_delay(check: ConsistencyCheck) -> int | None:
+    """Return a safe wake-up delay for a currently held lease, if any.
+
+    A redelivered Celery task must not acknowledge the only recovery signal for
+    a worker that died after claiming the row.  Scheduling a lightweight wakeup
+    at the expiry boundary lets that later delivery reclaim the lease without
+    making a second model call while the original worker is still healthy.
+    """
+    if check.status != ConsistencyCheckStatus.RUNNING.value or check.started_at is None:
+        return None
+
+    remaining = (_as_utc(check.started_at) + _CONSISTENCY_LEASE - _utcnow()).total_seconds()
+    # ``ceil`` means the ETA never rounds down before the lease boundary; the
+    # small buffer covers broker timing granularity and host clock jitter.
+    return max(1, ceil(remaining) + _CONSISTENCY_LEASE_WAKEUP_BUFFER_SECONDS)
+
+
+def _schedule_consistency_lease_wakeup(
+    task: Any, *, check_id: str, user_id: str, countdown: int
+) -> None:
+    """Queue a non-paying recovery delivery on the same agents queue.
+
+    ``RequestIdTask.apply_async`` carries the current request-id header forward
+    automatically, so the recovery remains connected to the original browser
+    request in worker logs.
+    """
+    task.apply_async(
+        kwargs={"check_id": check_id, "user_id": user_id},
+        queue=Queue.AGENTS.value,
+        countdown=countdown,
+    )
+
+
+def _claim_consistency_check(session: Any, check: ConsistencyCheck) -> str | None:
+    """Atomically claim the one model call allowed for a check row.
+
+    Celery is at-least-once. Two deliveries can both read ``pending`` before
+    either commits, so inspecting Python state is insufficient; the conditional
+    SQL UPDATE is the actual idempotency boundary. A long-dead running lease is
+    eligible again so worker loss does not strand the UI forever.
+    """
+    if check.status == ConsistencyCheckStatus.SUCCEEDED.value:
+        return None
+    if check.status not in {
+        ConsistencyCheckStatus.PENDING.value,
+        ConsistencyCheckStatus.RUNNING.value,
+    }:
+        return None
+
+    claimed_at = _utcnow()
+    stale_before = claimed_at - _CONSISTENCY_LEASE
+    if check.status == ConsistencyCheckStatus.RUNNING.value:
+        started_at = _as_utc(check.started_at) if check.started_at is not None else None
+        if started_at is not None and started_at > stale_before:
+            return None
+
+    run_token = uuid4().hex
+    claimable = or_(
+        ConsistencyCheck.status == ConsistencyCheckStatus.PENDING.value,
+        and_(
+            ConsistencyCheck.status == ConsistencyCheckStatus.RUNNING.value,
+            or_(
+                ConsistencyCheck.started_at.is_(None),
+                ConsistencyCheck.started_at <= stale_before,
+            ),
+        ),
+    )
+    result = session.execute(
+        update(ConsistencyCheck)
+        # This condition intentionally belongs entirely to the database.  In
+        # SQLite test sessions SQLAlchemy otherwise tries to evaluate the
+        # timestamp comparison against an in-memory naïve datetime before the
+        # atomic UPDATE runs, while the production/Postgres comparison is safe.
+        .execution_options(synchronize_session=False)
+        .where(ConsistencyCheck.id == check.id, claimable)
+        .values(
+            status=ConsistencyCheckStatus.RUNNING.value,
+            error=None,
+            started_at=claimed_at,
+            finished_at=None,
+            run_token=run_token,
+            # Legacy/manual pending rows can lack the API-created active key.
+            # Restoring it here preserves the database-level one-active-review
+            # invariant for every row that a worker touches.
+            active_key=check.version_id,
+        )
+    )
+    if result.rowcount != 1:
+        return None
+    session.commit()
+    return run_token
+
+
+def _record_consistency_failure(
+    check_id: str, *, retrying: bool, run_token: str | None
+) -> None:
+    """Persist a public-safe failure state outside the rolled-back task session."""
+    try:
+        with session_scope() as session:
+            check = session.get(ConsistencyCheck, check_id)
+            if check is None:
+                return
+            story_id = check.story_id
+            check_status = (
+                ConsistencyCheckStatus.PENDING.value
+                if retrying
+                else ConsistencyCheckStatus.FAILED.value
+            )
+            error = _CONSISTENCY_RETRYING if retrying else _CONSISTENCY_FAILURE
+            where = [ConsistencyCheck.id == check_id]
+            if run_token:
+                # Never let a crashed/slow old lease overwrite a newer worker's
+                # result after the stale-lease recovery path has reclaimed it.
+                where.append(ConsistencyCheck.run_token == run_token)
+            else:
+                where.append(ConsistencyCheck.status == ConsistencyCheckStatus.PENDING.value)
+            values: dict[str, Any] = {
+                "status": check_status,
+                "error": error,
+                "finished_at": None if retrying else _utcnow(),
+            }
+            if not retrying:
+                values["active_key"] = None
+            result = session.execute(
+                update(ConsistencyCheck)
+                .where(*where)
+                .values(**values)
+            )
+            if result.rowcount != 1:
+                return
+            session.commit()
+        repo.publish(
+            story_id,
+            {
+                "type": "consistency_check",
+                "check_id": check_id,
+                "status": check_status,
+            },
+        )
+    except Exception:
+        # This is a status aid rather than the task result itself; never hide
+        # the original model/database exception behind a secondary write error.
+        log.exception("consistency_failure_not_recorded", check_id=check_id)
+
+
+@celery_app.task(name=TaskName.CONSISTENCY_CHECK.value, bind=True, **RETRY_KWARGS)
+def check_story_consistency(self, check_id: str, user_id: str) -> str:  # type: ignore[no-untyped-def]
+    """Run a lightweight, read-only consistency review for one finished version.
+
+    This task does not create a ``Job`` row, alter ``Story.status``, or enter the
+    stage registry: a quality inspection must not make a finished episode look
+    like it is being regenerated. Its own durable row gives the UI something to
+    poll and preserves a short audit history.
+    """
+    # The durable check row, not a broker payload, is the authority for story
+    # ownership and cost attribution. Keeping this argument preserves the wire
+    # contract with the API dispatcher while preventing a tampered value from
+    # selecting a different account for the model ledger.
+    del user_id
+    init_tracing()
+    run_token: str | None = None
+    try:
+        with session_scope() as session:
+            check = session.get(ConsistencyCheck, check_id)
+            if check is None:
+                raise LookupError(f"consistency check {check_id} not found")
+
+            run_token = _claim_consistency_check(session, check)
+            if run_token is None:
+                # Refresh after a failed conditional UPDATE: this delivery may
+                # have read ``pending`` just before a competing worker claimed
+                # it.  In either that race or a direct redelivery, a fresh
+                # running lease needs a later wakeup so a worker crash does not
+                # strand the check forever after this task is acknowledged.
+                session.refresh(check)
+                countdown = _consistency_lease_wakeup_delay(check)
+                if countdown is not None:
+                    _schedule_consistency_lease_wakeup(
+                        self,
+                        check_id=check_id,
+                        user_id=check.user_id,
+                        countdown=countdown,
+                    )
+                    log.info(
+                        "consistency_check_lease_wakeup_scheduled",
+                        check_id=check_id,
+                        countdown_seconds=countdown,
+                    )
+                # A duplicate/redelivered task never touches the paid gateway.
+                return check_id
+
+            story_id, version_id, owner_id = check.story_id, check.version_id, check.user_id
+            version = session.get(StoryVersion, version_id)
+            if version is None or version.story_id != story_id:
+                raise LookupError("consistency check version is unavailable")
+
+            state = repo.load_state(session, version_id)
+            if state.story_id != story_id or not state.scenes or not state.lines:
+                raise ValueError("consistency check requires a completed story structure")
+
+            gateway = ModelGateway(
+                session,
+                stage="plot_hole_hunter",
+                version_id=version_id,
+                user_id=owner_id,
+                story_id=story_id,
+            )
+            summary, findings = review_story_consistency(state, gateway)
+
+            # Persist only the verified, bounded model projection returned by
+            # ``review_story_consistency``; never save a raw completion.
+            result = session.execute(
+                update(ConsistencyCheck)
+                .where(
+                    ConsistencyCheck.id == check_id,
+                    ConsistencyCheck.status == ConsistencyCheckStatus.RUNNING.value,
+                    ConsistencyCheck.run_token == run_token,
+                )
+                .values(
+                    summary=summary,
+                    findings_json=[finding.model_dump(mode="json") for finding in findings],
+                    status=ConsistencyCheckStatus.SUCCEEDED.value,
+                    error=None,
+                    finished_at=_utcnow(),
+                    active_key=None,
+                )
+            )
+            if result.rowcount != 1:
+                # A stale worker lost its lease while a newer one took over.
+                # Its output is intentionally discarded rather than overwriting
+                # the durable result, even though the call has already completed.
+                session.commit()
+                log.warning("consistency_check_lease_lost", check_id=check_id)
+                return check_id
+            session.commit()
+
+        repo.publish(
+            story_id,
+            {
+                "type": "consistency_check",
+                "check_id": check_id,
+                "status": ConsistencyCheckStatus.SUCCEEDED.value,
+            },
+        )
+        log.info(
+            "consistency_check_completed",
+            check_id=check_id,
+            version_id=version_id,
+            findings=len(findings),
+        )
+        return check_id
+    except Exception as exc:
+        _record_consistency_failure(
+            check_id,
+            retrying=_will_retry(self, exc),
+            run_token=run_token,
+        )
+        raise
 
 
 # --- audio export ----------------------------------------------------------

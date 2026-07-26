@@ -8,7 +8,12 @@ from .middleware import RequestIdMiddleware
 from .request_id import REQUEST_ID_HEADER, current_request_id, ensure_request_id
 from .settings import Settings, get_settings
 from .storage import MediaStore, get_store, validate_key
-from .versions import carry_over_assets, invalidated_dedupe_keys
+from .versions import (
+    carry_over_assets,
+    invalidated_dedupe_keys,
+    next_version_number,
+    prepare_regeneration_state,
+)
 
 __all__ = [
     "MediaStore",
@@ -29,6 +34,8 @@ __all__ = [
     "get_store",
     "init_db",
     "invalidated_dedupe_keys",
+    "next_version_number",
+    "prepare_regeneration_state",
     "session_scope",
     "validate_key",
 ]

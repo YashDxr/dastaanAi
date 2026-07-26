@@ -79,6 +79,30 @@ export type FeedbackEntry = {
   created_at: string
 }
 
+export type ConsistencyFinding = {
+  severity: 'critical' | 'warning'
+  type: 'knowledge' | 'timeline' | 'character' | 'causality' | 'continuity'
+  scene_id: string
+  line_id: string | null
+  explanation: string
+  suggestion: string
+}
+
+/** A read-only Plot Hole Hunter run for the version currently open in Studio. */
+export type ConsistencyCheck = {
+  id: string
+  story_id: string
+  version_id: string
+  status: 'pending' | 'running' | 'succeeded' | 'failed'
+  task_id: string | null
+  summary: string | null
+  findings: ConsistencyFinding[]
+  error: string | null
+  created_at: string
+  started_at: string | null
+  finished_at: string | null
+}
+
 export type StoryDetail = {
   story: Story
   version: Version | null

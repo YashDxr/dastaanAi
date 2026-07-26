@@ -8,7 +8,7 @@ contract and neither React app hand-writes an interface.
 from datetime import datetime
 from typing import Any, Literal
 
-from daastaan_contracts import Scope, StageName, VideoEditManifest, limits
+from daastaan_contracts import ConsistencyCheckStatus, ConsistencyFinding, Scope, StageName, VideoEditManifest, limits
 from pydantic import BaseModel, EmailStr, Field
 
 # --- auth ------------------------------------------------------------------
@@ -80,7 +80,12 @@ class IngestOut(BaseModel):
 class CreateStoryRequest(BaseModel):
     raw_text: str = Field(min_length=20, max_length=limits.MAX_STORY_INPUT_CHARS)
     genre_hint: str | None = Field(default=None, max_length=60)
-    language: str = Field(default="en", min_length=2, max_length=5, pattern=r"^[a-z]{2,3}(-[A-Z]{2})?$")
+    language: str = Field(
+        default="en",
+        min_length=2,
+        max_length=5,
+        pattern=r"^[a-z]{2,3}(-[A-Z]{2})?$",
+    )
     output_format: Literal["audio", "video", "both"] = "audio"
 
 
@@ -186,6 +191,14 @@ class RegenerateRequest(BaseModel):
     target_stage: StageName
     target_id: str | None = Field(default=None, max_length=64)
     instruction_delta: str = Field(default="", max_length=limits.MAX_FEEDBACK_CHARS)
+    # A Story Time Machine branch can intentionally start from an older
+    # revision. The route verifies that this version belongs to the owned story;
+    # callers cannot use it to read or fork another user's state.
+    base_version_id: str | None = Field(default=None, max_length=64)
+    # Browser clients send the current pointer they last rendered. It is an
+    # optimistic-concurrency guard, separate from ``base_version_id`` so an
+    # intentional branch from v1 can still become a sibling of current v3.
+    expected_current_version_id: str | None = Field(default=None, max_length=64)
 
 
 class DispatchAccepted(BaseModel):
@@ -346,6 +359,30 @@ class SharedCutOut(BaseModel):
     aspect: str
     video_url: str
     expires_at: datetime | None
+
+
+# --- Plot Hole Hunter ------------------------------------------------------
+
+
+class ConsistencyCheckOut(BaseModel):
+    """Safe projection of one read-only continuity review.
+
+    Findings are already strict-schema validated and reference-checked by the
+    worker. The API still validates them through this DTO before returning them
+    so a malformed database value can never become arbitrary client content.
+    """
+
+    id: str
+    story_id: str
+    version_id: str
+    status: ConsistencyCheckStatus
+    task_id: str | None
+    summary: str | None
+    findings: list[ConsistencyFinding]
+    error: str | None
+    created_at: datetime
+    started_at: datetime | None
+    finished_at: datetime | None
 
 
 # --- admin -----------------------------------------------------------------

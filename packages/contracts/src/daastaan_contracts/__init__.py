@@ -29,6 +29,7 @@ from .editing import (
 from .enums import (
     AssetKind,
     CharacterRole,
+    ConsistencyCheckStatus,
     FeedbackStatus,
     IngestStatus,
     JobStatus,
@@ -57,6 +58,9 @@ from .languages import language_name
 from .models import (
     Character,
     CharacterRegistryOutput,
+    ConsistencyAnalysisOutput,
+    ConsistencyFinding,
+    ConsistencyFindingOutput,
     DialogueLine,
     DialogueScriptOutput,
     EmotionTaggingOutput,
@@ -103,6 +107,10 @@ __all__ = [
     "CharacterRegistryOutput",
     "CharacterRole",
     "CompleteEvent",
+    "ConsistencyCheckStatus",
+    "ConsistencyAnalysisOutput",
+    "ConsistencyFinding",
+    "ConsistencyFindingOutput",
     "Corner",
     "DialogueLine",
     "DialogueScriptOutput",

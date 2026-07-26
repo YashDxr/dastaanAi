@@ -157,6 +157,12 @@ narration and score already mixed together. Nothing in the editor touches
 `StoryState` or the story's status, so a failed export cannot make a healthy
 story look broken. See [the video editor guide](docs/guides/video-editor.md).
 
+Finished stories also expose three **alternate ending** choices in the listener
+studio. Each choice forks a normal child `StoryVersion` at the penultimate scene
+and re-enters at `story_understanding`, so every later scene, line, asset, and
+mix stays consistent with the new decision while the parent version remains
+unchanged.
+
 ## Live progress
 
 Progress reaches the browser over SSE (`GET /api/stories/{id}/events`), fed by a

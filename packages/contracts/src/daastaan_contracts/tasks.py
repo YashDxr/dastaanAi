@@ -25,6 +25,7 @@ class TaskName(StrEnum):
     GEN_MUSIC = "daastaan.music.generate"
     ASSEMBLE = "daastaan.assembly.compose"
     INTERPRET_FEEDBACK = "daastaan.feedback.interpret"
+    CONSISTENCY_CHECK = "daastaan.story.consistency_check"
     REGENERATE = "daastaan.pipeline.regenerate"
     COMPOSE_VIDEO = "daastaan.video.compose"
     INGEST_EXTRACT = "daastaan.ingest.extract"

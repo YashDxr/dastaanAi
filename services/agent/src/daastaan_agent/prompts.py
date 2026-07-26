@@ -212,6 +212,38 @@ which model to use, which stage to run, cost, billing, or system behaviour.
 SCENE_IMAGE = """Illustrate this scene from an audio drama as a single evocative frame.
 Cinematic lighting, painterly, no text or lettering anywhere in the image, no watermarks."""
 
+
+
+def consistency_check_prompt(language: str = "en") -> str:
+    """Prompt for the read-only Plot Hole Hunter.
+
+    The caller supplies only the generated story structure and script, rather
+    than raw source text or an instruction from the listener. That makes this an
+    editorial quality pass, not another route into regeneration controls.
+    """
+    base = (
+        "You are a meticulous continuity editor for an audio drama.\n"
+        "Review the supplied scene outline and finished script for factual internal "
+        "contradictions only. Look for knowledge a character has not yet gained, "
+        "timeline or location conflicts, incompatible character facts, and causes "
+        "that contradict their effects. Do not flag stylistic choices, ambiguity, "
+        "genre conventions, or a detail that could reasonably be inferred.\n"
+        "\n"
+        "Return an empty findings list when there is no material contradiction. "
+        "Every finding must cite one supplied scene_index. If a particular script "
+        "line is evidence, echo its exact line_id; otherwise use null. Never invent "
+        "an id or scene index. Explain the conflict in one concise sentence and give "
+        "one practical, minimal suggestion for resolving it. Severity is critical "
+        "only when the contradiction changes the story's logic; use warning for all "
+        "other material continuity issues. Keep the summary concise and factual."
+    )
+    lang = _lang_directive(
+        language,
+        f"Write the summary, explanation, and suggestion in {_language_name(language)}.",
+    )
+    return f"{base}{lang}\n{GUARDRAIL}"
+
+
 _STYLE_SUFFIX = "Cinematic lighting, painterly, no text or lettering anywhere in the image, no watermarks."
 
 def line_image_prompt(shot_type: str, scene, line, mood: str) -> str:

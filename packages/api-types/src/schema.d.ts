@@ -166,6 +166,30 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/stories/{story_id}/versions/{version_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Version
+         * @description Load a historical version's immutable timeline for the Time Machine.
+         *
+         *     The story dependency has already checked ownership. The additional story-id
+         *     predicate prevents a caller who knows another version UUID from using this
+         *     route to read it or to make it a fork parent.
+         */
+        get: operations["get_version_api_stories__story_id__versions__version_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/stories/{story_id}/jobs": {
         parameters: {
             query?: never;
@@ -237,6 +261,33 @@ export interface paths {
          *     trusts the model to choose what runs.
          */
         post: operations["submit_feedback_api_stories__story_id__feedback_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/stories/{story_id}/consistency-checks": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Consistency Checks
+         * @description Return the recent reviews for the current version only.
+         *
+         *     A result for an older branch must never be displayed as a review of the
+         *     current ending, so version is part of the query rather than just the story.
+         */
+        get: operations["list_consistency_checks_api_stories__story_id__consistency_checks_get"];
+        put?: never;
+        /**
+         * Create Consistency Check
+         * @description Queue one idempotent-in-flight, lightweight continuity review.
+         */
+        post: operations["create_consistency_check_api_stories__story_id__consistency_checks_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -565,6 +616,24 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/stories/{story_id}/bgm/exports": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Bgm Exports */
+        get: operations["list_bgm_exports_api_stories__story_id__bgm_exports_get"];
+        put?: never;
+        /** Create Bgm Export */
+        post: operations["create_bgm_export_api_stories__story_id__bgm_exports_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/stories/{story_id}/events": {
         parameters: {
             query?: never;
@@ -668,6 +737,70 @@ export interface components {
         Body_upload_api_ingest_post: {
             /** File */
             file: string;
+        };
+        /**
+         * ConsistencyCheckOut
+         * @description Safe projection of one read-only continuity review.
+         *
+         *     Findings are already strict-schema validated and reference-checked by the
+         *     worker. The API still validates them through this DTO before returning them
+         *     so a malformed database value can never become arbitrary client content.
+         */
+        ConsistencyCheckOut: {
+            /** Id */
+            id: string;
+            /** Story Id */
+            story_id: string;
+            /** Version Id */
+            version_id: string;
+            status: components["schemas"]["ConsistencyCheckStatus"];
+            /** Task Id */
+            task_id: string | null;
+            /** Summary */
+            summary: string | null;
+            /** Findings */
+            findings: components["schemas"]["ConsistencyFinding"][];
+            /** Error */
+            error: string | null;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Started At */
+            started_at: string | null;
+            /** Finished At */
+            finished_at: string | null;
+        };
+        /**
+         * ConsistencyCheckStatus
+         * @description Lifecycle of a read-only Plot Hole Hunter request.
+         * @enum {string}
+         */
+        ConsistencyCheckStatus: "pending" | "running" | "succeeded" | "failed";
+        /**
+         * ConsistencyFinding
+         * @description A checked, user-safe finding persisted by the worker and returned by API.
+         */
+        ConsistencyFinding: {
+            /**
+             * Severity
+             * @enum {string}
+             */
+            severity: "critical" | "warning";
+            /**
+             * Type
+             * @enum {string}
+             */
+            type: "knowledge" | "timeline" | "character" | "causality" | "continuity";
+            /** Scene Id */
+            scene_id: string;
+            /** Line Id */
+            line_id: string | null;
+            /** Explanation */
+            explanation: string;
+            /** Suggestion */
+            suggestion: string;
         };
         /** CostRow */
         CostRow: {
@@ -921,6 +1054,10 @@ export interface components {
              * @default
              */
             instruction_delta: string;
+            /** Base Version Id */
+            base_version_id?: string | null;
+            /** Expected Current Version Id */
+            expected_current_version_id?: string | null;
         };
         /** RoleUpdate */
         RoleUpdate: {
@@ -1264,7 +1401,7 @@ export interface components {
          * AssetKind
          * @enum {string}
          */
-        AssetKind: "line_audio" | "scene_image" | "music_bed" | "final_episode" | "final_video" | "episode_export";
+        AssetKind: "line_audio" | "scene_image" | "music_bed" | "final_episode" | "final_video" | "episode_export" | "bgm_export";
         /**
          * CompleteEvent
          * @description The episode is playable. Terminal for a run.
@@ -1713,6 +1850,38 @@ export interface operations {
             };
         };
     };
+    get_version_api_stories__story_id__versions__version_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                version_id: string;
+                story_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StoryDetailOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     get_progress_api_stories__story_id__jobs_get: {
         parameters: {
             query?: never;
@@ -1834,6 +2003,68 @@ export interface operations {
                     "application/json": {
                         [key: string]: string;
                     };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_consistency_checks_api_stories__story_id__consistency_checks_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                story_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConsistencyCheckOut"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_consistency_check_api_stories__story_id__consistency_checks_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                story_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConsistencyCheckOut"];
                 };
             };
             /** @description Validation Error */
@@ -2365,6 +2596,72 @@ export interface operations {
         };
     };
     create_export_api_stories__story_id__exports_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                story_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ExportRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ExportOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_bgm_exports_api_stories__story_id__bgm_exports_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                story_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ExportFormatOut"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_bgm_export_api_stories__story_id__bgm_exports_post: {
         parameters: {
             query?: never;
             header?: never;

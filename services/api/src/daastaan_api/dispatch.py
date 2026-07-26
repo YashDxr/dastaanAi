@@ -123,3 +123,15 @@ def dispatch_feedback_interpretation(
     )
     log.info("dispatched_feedback", feedback_id=feedback_id, task_id=task.id)
     return task.id
+
+
+def dispatch_consistency_check(*, check_id: str, user_id: str) -> str:
+    """Queue a read-only editorial review on the lightweight agents worker."""
+    task = celery_app.send_task(
+        TaskName.CONSISTENCY_CHECK.value,
+        kwargs={"check_id": check_id, "user_id": user_id},
+        queue=Queue.AGENTS.value,
+        headers=_task_headers(),
+    )
+    log.info("dispatched_consistency_check", check_id=check_id, task_id=task.id)
+    return task.id

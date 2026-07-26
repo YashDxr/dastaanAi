@@ -6,6 +6,8 @@ strict mode requires every property to be required and supports only a narrow
 subset of keywords. Range checks belong in validators, which run after parsing.
 """
 
+from typing import Literal
+
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from .enums import AssetKind, CharacterRole, LineType, VoiceAge, VoiceGender
@@ -131,6 +133,45 @@ class DialogueLine(Strict):
     intensity: int | None = None
     tts_instructions: str | None = None
     pause_after_ms: int = 0
+
+
+class ConsistencyFindingOutput(Strict):
+    """One issue found by the on-demand Plot Hole Hunter model.
+
+    The model refers to a scene by its stable *index*, not its database id. The
+    worker maps that index back to a real scene id and drops references it cannot
+    verify before anything reaches a client.
+    """
+
+    severity: Literal["critical", "warning"]
+    type: Literal["knowledge", "timeline", "character", "causality", "continuity"]
+    scene_index: int
+    line_id: str | None
+    explanation: str
+    suggestion: str
+
+
+class ConsistencyAnalysisOutput(Strict):
+    """Strict structured output for the on-demand consistency checker.
+
+    This is deliberately not a pipeline stage. It is a read-only editorial
+    review that can be requested for a completed story without altering the
+    version, its media, or its regeneration plan.
+    """
+
+    summary: str
+    findings: list[ConsistencyFindingOutput]
+
+
+class ConsistencyFinding(Strict):
+    """A checked, user-safe finding persisted by the worker and returned by API."""
+
+    severity: Literal["critical", "warning"]
+    type: Literal["knowledge", "timeline", "character", "causality", "continuity"]
+    scene_id: SceneId
+    line_id: LineId | None
+    explanation: str
+    suggestion: str
 
 
 # --- Stage 5: emotion tagging ----------------------------------------------
