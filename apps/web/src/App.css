@@ -1576,6 +1576,199 @@
   border-top: none;
 }
 
+/* Sound design ----------------------------------------------------------- */
+
+/* `hidden` on the tabpanel has to keep winning over the flex display. */
+.scenes-panel:not([hidden]) {
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+}
+
+.ambience-panel {
+  background: color-mix(in srgb, #fff 90%, transparent);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: 1.15rem 1.2rem;
+  animation: rise 0.65s var(--ease) both;
+}
+
+.ambience-panel > .muted {
+  margin: 0.35rem 0 0;
+  font-size: 0.88rem;
+  max-width: 46ch;
+}
+
+.sound-mode-selector {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin-top: 1rem;
+}
+
+.sound-mode-selector .chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.sound-mode-selector .chip.active {
+  border-color: var(--teal);
+  background: color-mix(in srgb, var(--teal) 12%, #fff);
+  color: var(--teal-deep);
+  font-weight: 500;
+}
+
+.coming-soon {
+  font-size: 0.62rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink-soft);
+  background: color-mix(in srgb, var(--line) 45%, transparent);
+  border-radius: 999px;
+  padding: 0.1rem 0.4rem;
+  white-space: nowrap;
+}
+
+.ambience-mode-note {
+  margin: 0.6rem 0 0;
+  font-size: 0.82rem;
+  color: var(--ink-soft);
+}
+
+.soundscape-timeline {
+  display: flex;
+  gap: 2px;
+  margin-top: 1.1rem;
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+/* Width comes from the inline flex-basis the component computes per scene, so
+   the strip stays proportional to how long each scene runs. */
+.soundscape-timeline-block {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+  padding: 0.5rem 0.55rem;
+  background: color-mix(in srgb, var(--line) 22%, transparent);
+  border-left: 3px solid var(--teal);
+}
+
+.soundscape-timeline-label,
+.soundscape-timeline-mood {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.soundscape-timeline-label {
+  font-size: 0.76rem;
+  font-weight: 600;
+}
+
+.soundscape-timeline-mood {
+  font-size: 0.68rem;
+  color: var(--ink-soft);
+}
+
+.ambience-scene-list {
+  list-style: none;
+  margin: 1.1rem 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+  transition: opacity 0.2s var(--ease);
+}
+
+.ambience-scene-list.is-muted {
+  opacity: 0.45;
+}
+
+.ambience-scene {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 0.7rem 0.85rem;
+}
+
+.ambience-scene-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.ambience-mood {
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.ambience-setting {
+  margin: 0.2rem 0 0;
+  font-size: 0.85rem;
+}
+
+.ambience-suggestion {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-top: 0.55rem;
+  font-size: 0.85rem;
+}
+
+.ambience-suggestion .coming-soon {
+  margin-left: auto;
+}
+
+.ambience-suggestion-icon {
+  width: 0.5rem;
+  height: 0.5rem;
+  border-radius: 50%;
+  flex: none;
+  background: var(--teal);
+}
+
+.ambience-suggestion-icon[data-type='rain'],
+.ambience-suggestion-icon[data-type='ocean'],
+.ambience-suggestion-icon[data-type='water'] {
+  background: #4f8fc0;
+}
+
+.ambience-suggestion-icon[data-type='forest'],
+.ambience-suggestion-icon[data-type='nature'] {
+  background: #6bbd5b;
+}
+
+.ambience-suggestion-icon[data-type='city'],
+.ambience-suggestion-icon[data-type='interior'] {
+  background: #8e8e9e;
+}
+
+.ambience-suggestion-icon[data-type='fireplace'],
+.ambience-suggestion-icon[data-type='bright'] {
+  background: var(--amber);
+}
+
+.ambience-suggestion-icon[data-type='cave'],
+.ambience-suggestion-icon[data-type='night'],
+.ambience-suggestion-icon[data-type='tension'] {
+  background: #5a5a6e;
+}
+
+.ambience-suggestion-icon[data-type='intimate'] {
+  background: #d16ba5;
+}
+
+.ambience-suggestion-icon[data-type='somber'] {
+  background: #5b7db1;
+}
+
 /* Plot Hole Hunter ------------------------------------------------------ */
 
 .consistency-head {

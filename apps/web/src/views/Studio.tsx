@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { AppHeader } from '../components/AppHeader'
 import { AlternateEndings } from '../components/AlternateEndings'
+import { AmbiencePanel } from '../components/AmbiencePanel'
 import { AudioPlayer } from '../components/AudioPlayer'
 import { CliffhangerPanel } from '../components/CliffhangerPanel'
 import { VideoPlayer, VideoPlayerEmpty } from '../components/VideoPlayer'
@@ -428,6 +429,7 @@ export function Studio({ user, storyId, tab, onTab, onLogout, onHome, onCompose 
             </div>
 
             <div
+              className="scenes-panel"
               id="studio-panel-scenes"
               role="tabpanel"
               aria-labelledby="studio-tab-scenes"
@@ -443,6 +445,13 @@ export function Studio({ user, storyId, tab, onTab, onLogout, onHome, onCompose 
                   onTab('episode')
                 }}
               />
+              {scenes.length > 0 && (
+                <AmbiencePanel
+                  scenes={scenes}
+                  lines={state?.lines ?? []}
+                  hasMusicBed={hasMusicBed}
+                />
+              )}
             </div>
 
             <div

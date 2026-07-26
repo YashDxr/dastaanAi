@@ -84,6 +84,18 @@ const SOUND_MODES: { value: SoundMode; label: string; disabled: boolean; note?: 
   { value: 'full-atmosphere', label: 'Full Atmosphere', disabled: true, note: 'Coming soon' },
 ]
 
+/** What each mix contains, so the selector describes the episode rather than
+ *  implying it re-renders one. Nothing here is generated yet. */
+function modeDescription(mode: SoundMode, hasMusicBed: boolean): string {
+  if (mode === 'narration-only') return 'Voices alone, no score or atmosphere underneath.'
+  if (mode === 'narration-score') {
+    return hasMusicBed
+      ? 'Voices over the generated score. This is what the episode sounds like today.'
+      : 'Voices over a score. No music bed has been generated for this episode yet.'
+  }
+  return 'Voices, score, and a per-scene ambience layer. Not generated yet.'
+}
+
 export function AmbiencePanel({ scenes, lines, hasMusicBed }: Props) {
   const [soundMode, setSoundMode] = useState<SoundMode>(
     hasMusicBed ? 'narration-score' : 'narration-only',
@@ -126,14 +138,19 @@ export function AmbiencePanel({ scenes, lines, hasMusicBed }: Props) {
   return (
     <div className="ambience-panel">
       <p className="eyebrow">Sound Design</p>
+      <p className="muted">
+        Suggested atmosphere for each scene, read from its setting and mood. Planning
+        only — ambience beds are not generated yet.
+      </p>
 
-      <div className="sound-mode-selector">
+      <div className="sound-mode-selector" role="group" aria-label="Sound mix">
         {SOUND_MODES.map((mode) => (
           <button
             key={mode.value}
             type="button"
             className={`chip${soundMode === mode.value ? ' active' : ''}${mode.disabled ? ' disabled-chip' : ''}`}
             disabled={mode.disabled}
+            aria-pressed={soundMode === mode.value}
             title={mode.note}
             onClick={() => !mode.disabled && setSoundMode(mode.value)}
           >
@@ -142,6 +159,7 @@ export function AmbiencePanel({ scenes, lines, hasMusicBed }: Props) {
           </button>
         ))}
       </div>
+      <p className="ambience-mode-note">{modeDescription(soundMode, hasMusicBed)}</p>
 
       <div className="soundscape-timeline" role="img" aria-label="Soundscape timeline">
         {sceneData.map((d) => {
@@ -163,7 +181,11 @@ export function AmbiencePanel({ scenes, lines, hasMusicBed }: Props) {
         })}
       </div>
 
-      <ul className="ambience-scene-list">
+      {/* The suggestions describe a layer that narration-only would not carry,
+          so they recede rather than disappear when that mix is selected. */}
+      <ul
+        className={`ambience-scene-list${soundMode === 'narration-only' ? ' is-muted' : ''}`}
+      >
         {sceneData.map((d) => (
           <li key={d.scene.id} className="ambience-scene">
             <div className="ambience-scene-head">
