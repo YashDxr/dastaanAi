@@ -1,264 +1,292 @@
 # Daastaan AI
 
-Turns a raw dream, memory, or idea into a cinematic audio drama, and lets you
-reshape it in plain language ("make her sound more afraid") without regenerating
-the whole thing.
+> Turn a dream, memory, document, or fragment into a performed story—then keep
+> directing it until it feels right.
 
-## Layout
+Daastaan AI is a version-aware storytelling studio. It turns a prompt or
+uploaded source into a cast, script, narration, scene artwork, optional score,
+and finished audio or video episode. Rather than treating generation as a
+one-shot result, it gives creators precise controls to revise a line, character,
+scene, score, or ending while preserving the work that should remain unchanged.
 
-```
-packages/contracts    Pydantic contracts + stage registry. Pure Pydantic, no infra deps.
-packages/common       Settings, database, object storage, logging, the Celery app.
-packages/api-types    TypeScript types generated from the API's OpenAPI schema.
-services/api          FastAPI: auth, stories, feedback, media streaming, editor, admin.
-services/agent        LangGraph stages, TTS, images, ffmpeg assembly and edits, Celery workers.
-services/music        Native macOS Stable Audio MLX sidecar (not a Docker model runtime).
-apps/web              Listener app (Vite + React), port 5173.
-apps/admin            Operator panel (Vite + React), port 5174.
-infra/docker          Shared Dockerfile for the API, agent, and all workers.
-infra/observability   Loki, Promtail, Grafana provisioning for request-id search.
-```
+This README documents the current `main` branch.
 
-Python is a `uv` workspace; JavaScript is an `npm` workspace. One Redis, one
-image for every Python process. Postgres is either Compose-managed or your host
-install (`POSTGRES_MODE`).
+## What creators can do
 
-## Getting started
-
-```bash
-make setup          # Python deps, JS deps, and a .env from the template
-# add your OPENAI_API_KEY to .env
-make up             # Redis, API, agent, workers (+ Postgres if POSTGRES_MODE=docker)
-make web            # listener app on http://localhost:5173
-make admin          # operator panel on http://localhost:5174
-```
-
-The API is on http://localhost:8000, with docs at `/api/docs`.
-
-### Postgres: Docker or your local install
-
-Set in `.env`:
-
-```bash
-POSTGRES_MODE=docker   # Compose Postgres (default)
-# or
-POSTGRES_MODE=host     # your laptop Postgres — Compose will not start a DB container
-```
-
-For `host` mode, point containers at your machine:
-
-```bash
-DATABASE_URL=postgresql+psycopg://USER:PASS@host.docker.internal:5432/YOUR_DB
-```
-
-Create the database/user on the host once; the API still runs `create_all` on startup.
-
-### Tools and debugging
-
-```bash
-make tools            # Redis Insight :5540 + Flower :5555
-make observe          # Loki + Grafana :3000 (admin/admin). Prefer LOG_JSON=true
-make logs-api         # also: logs-agent, logs-worker-media, logs-redis, …
-```
-
-Every HTTP response includes `X-Request-ID`. With `LOG_JSON=true` and `make observe`, open Grafana Explore and search:
-
-```
-{compose_project="daastaan"} |= "YOUR_REQUEST_ID"
-```
-
-Or use the provisioned **Daastaan request debugger** dashboard.
-
-### Inspecting the response cache
-
-Redis Insight opens on the cache automatically: the connection is preconfigured
-to `redis:6379` **db 1**, aliased `daastaan-cache`. Filter on `daastaan:cache:*`,
-which splits into:
-
-| Pattern | Holds |
+| Area | What is available |
 | --- | --- |
-| `daastaan:cache:llm:<sha>` | The structured completion itself |
-| `daastaan:cache:tts:<sha>` | An object-store *pointer*, not audio bytes |
-| `daastaan:cache:image:<sha>` | An object-store *pointer*, not image bytes |
-| `daastaan:cache:index:<story_id>` | Set of every key that story wrote |
+| **Start anywhere** | Write a prompt or upload text, PDF, Word, and image sources. OCR/extraction returns editable text before any generation begins. |
+| **Choose the output** | Create audio, video, or both. Video adds scene artwork; the creator can set a genre hint and choose from English, major European/Japanese options, and a broad set of Indian languages. |
+| **Follow the work live** | The Studio reports stage status, fan-out progress, and previews as the story is understood, cast, voiced, scored, and assembled. |
+| **Listen and inspect** | Play the finished episode with a synchronised, seekable transcript, scene chapters, playback-speed control, character avatars, artwork, and downloads. |
+| **Direct precisely** | Ask for a different performance or outcome at the scope of one line, a character’s lines, a scene, the background score, or the complete episode. |
+| **Explore revisions** | Use Story Time Machine to select a previous version and branch the future from a chosen scene without overwriting the parent story. |
+| **Test the ending** | Generate alternate endings and use the Cliffhanger Optimizer to examine tension, unresolved threads, and alternative ending suggestions. |
+| **Understand the draft** | Story DNA exposes arc, pacing, dialogue balance, story traits, and character balance. Writers Room adds structured critique and priority actions. Plot Hole Hunter checks continuity without changing the story. |
+| **Cut a shareable video** | Trim to scene boundaries, reframe for 16:9, 9:16, 1:1, or 4:5, style captions, add a title card/watermark, mix a local track, render, download, and share a cut. |
+| **Keep a working library** | Search, sort, filter, favourite, and reopen stories from the listener library. |
+| **Run the platform** | The admin console covers spend, users, review queue, runs, settings, and an audit trail. |
 
-The cache is on db 1 specifically so Celery's `celery-task-meta-*` keys, which
-live on db 0 and outnumber cache entries several times over, stay out of the
-way. Every entry carries `_stage`, `_model`, `_story_id`, `_version_id` and a
-short `_preview`, so a hashed key can be traced back to what produced it.
+### The generation pipeline
 
-Two things that look like bugs and are not. Stories generated before the cache
-existed wrote no keys and nothing backfills them, so they will not appear until
-identical content is generated again. And keys are content-addressed with no
-story id in them - that is what lets two users share a hit - so the per-story
-index is the only way to browse by story.
+Every episode progresses through an explicit pipeline, which is why the UI can
+show meaningful status instead of a generic loading state:
 
-To iterate faster, run Redis/(optional) Postgres in Docker and the services on your host:
+1. **Story understanding** — interpret the source and establish its premise.
+2. **Character registry** — identify the cast and their roles.
+3. **Dialogue split** — shape the spoken script.
+4. **Emotion detection** — annotate delivery intent.
+5. **Narrator persona** — establish the narrator’s performance.
+6. **Voice generation** — produce per-line audio.
+7. **Music generation** — optionally request a local instrumental bed.
+8. **Assembly** — compose narration, artwork, captions, and score.
+9. **Episode** — deliver a playable audio and/or video result.
 
-```bash
-make infra          # Redis (+ Postgres when POSTGRES_MODE=docker)
-make api            # reload-on-save
-make worker         # one worker across all queues
+## Why revisions are safe
+
+Daastaan treats a revision as a new `StoryVersion`, not as an in-place edit.
+Reusable assets carry forward where they still apply; the affected downstream
+work is regenerated and the final mix is rebuilt. A single-line direction, for
+example, can re-run emotional delivery, that line’s TTS, and assembly instead
+of recreating an entire episode.
+
+```mermaid
+flowchart LR
+    C["Creator"] --> W["React + Vite studio"]
+    W --> A["FastAPI"]
+    A --> G["LangGraph story pipeline"]
+    G --> Q["Celery + Redis queues"]
+    Q --> F["Media fan-out\nvoices · artwork · optional music"]
+    F --> S["Object storage + Postgres\nversioned state and assets"]
+    F --> X["FFmpeg assembly and video edits"]
+    X --> W
+    A --> E["SSE event stream"]
+    E --> W
+    M["Native Apple-Silicon\nStable Audio MLX sidecar"] -. optional score .-> Q
 ```
 
-`make help` lists everything.
+The design has a few important consequences:
 
-### Local background music (Apple Silicon)
+- The original version remains playable while a child version is generated.
+- Story Time Machine and alternate endings branch from a chosen point instead
+  of mutating history.
+- Editor cuts are separate manifests and renders; a failed export does not put
+  a finished story into a failed state.
+- Media work is fan-out work, while final assembly is a durable downstream job.
 
-The BGM model stays in a native macOS sidecar so its MLX runtime can access
-Metal; Docker workers call it over a signed private HTTP API.
+## Live, observable generation
 
-**If you are the music Mac owner** — start the sidecar with `make music-service`
-(already configured with Tailscale Serve on
-`https://subramanyas-macbook-air.tail70ba05.ts.net`).
+The browser follows a capped Redis stream over Server-Sent Events at
+`GET /api/stories/{id}/events`. `Last-Event-ID` lets the client resume after a
+reconnect, while `GET /api/stories/{id}/jobs` provides a polling fallback.
 
-**If you are a teammate** running the Docker stack on a different Mac — join the
-same Tailscale account, then set in your `.env`:
+| Event | Example value in the Studio |
+| --- | --- |
+| `stage` | A stage starts, completes, or fails. |
+| `stage_progress` | Per-line voice or per-scene media fan-out count. |
+| `stage_preview` | A character, scene title, or script detail as it becomes available. |
+| `stage_tokens` | Progress for a stage that has no creator-facing preview yet. |
+| `asset`, `music_status`, `feedback`, `complete` | New media, optional-score state, applied direction, or a ready episode. |
+
+The event schema is a typed discriminated union shared through the API contract,
+so the frontend does not have to guess at response shapes.
+
+## Video editor and sharing
+
+The editor rebuilds a cut from its source artwork and per-line audio rather than
+trimming the final MP4. That lets a creator:
+
+- choose `16:9`, `9:16`, `1:1`, or `4:5` framing;
+- crop or blur to fill a frame;
+- trim safely at line/scene boundaries;
+- style timing-aware captions, title cards, and watermarks;
+- control narration and score gain, ducking, fades, loops, and an uploaded
+  backing track;
+- use quick scene clips and render a durable export;
+- download the H.264/AAC MP4 master, MOV/MKV remuxes, or a VP9 WebM; and
+- mint a revocable, unindexed share link once a render exists.
+
+See [the video-editor guide](docs/guides/video-editor.md) for the manifest,
+timeline, caption, and sharing details.
+
+## Local background music
+
+Music is optional. On Apple Silicon, the project can call a native Stable Audio
+MLX sidecar through a signed private HTTP interface. The Docker worker never
+loads model weights; it requests a job, validates the returned WAV, and passes a
+`music_bed` into assembly. If the sidecar is unavailable, the episode completes
+with narration only.
+
+```bash
+# Copy and fill the private sidecar credentials and paths first.
+cp .env.music.example .env.music
+
+# Run the native MLX sidecar on the music host.
+make music-service
+
+# In .env, enable the optional client and point it at that trusted service.
+# MUSIC_ENABLED=true
+# MUSIC_CLIENT_ENABLED=true
+# MUSIC_SERVICE_BASE_URL=http://host.docker.internal:8787
+```
+
+The full setup and security model are in
+[the local music sidecar guide](docs/guides/local-music-sidecar.md).
+
+> **Note:** the Scenes tab also includes an ambience-planning interface. It is
+> intentionally labelled planning-only; ambient audio is not currently rendered
+> by the backend.
+
+## Architecture and repository layout
+
+| Path | Responsibility |
+| --- | --- |
+| [`apps/web`](apps/web) | Creator/listener app: compose, library, studio, revisions, player, editor, and share view. Runs on port `5173`. |
+| [`apps/admin`](apps/admin) | Operator console: spend, users, review queue, runs, settings, and audit. Runs on port `5174`. |
+| [`services/api`](services/api) | FastAPI service for auth, stories, feedback, media, progress, exports, sharing, editor, and administration. |
+| [`services/agent`](services/agent) | LangGraph stages, model gateway, prompt work, Celery tasks, assembly, and edit rendering. |
+| [`services/music`](services/music) | Native macOS Stable Audio MLX sidecar—not a Docker model runtime. |
+| [`packages/contracts`](packages/contracts) | Infrastructure-free Pydantic contracts, stage registry, event types, and editing manifests. |
+| [`packages/common`](packages/common) | Settings, database, object storage, IDs, logging, cache, and Celery configuration. |
+| [`packages/api-types`](packages/api-types) | TypeScript API types generated from the FastAPI OpenAPI schema. |
+| [`infra`](infra) | Shared Python container image and observability provisioning. |
+| [`docs`](docs) | Product and operational guides, specifications, handoff notes, and README assets. |
+
+Python is managed as a `uv` workspace. JavaScript is managed as an `npm`
+workspace. The standard stack uses Redis plus either Compose-managed Postgres or
+an existing host Postgres installation.
+
+## Quick start
+
+### Prerequisites
+
+- Python **3.12** and [`uv`](https://docs.astral.sh/uv/)
+- Node.js and npm (Node 20+ is recommended)
+- Docker Desktop for the standard backend stack
+- An OpenAI API key for model-backed generation
+
+### Start the stack
+
+```bash
+# Install Python and JavaScript dependencies. Creates .env from the template.
+make setup
+
+# Add OPENAI_API_KEY to .env before generating a story.
+
+# Start Redis, API, agent, Celery workers, and Postgres (unless host Postgres is selected).
+make up
+
+# In separate terminals:
+make web      # http://localhost:5173
+make admin    # http://localhost:5174
+```
+
+The API is available at `http://localhost:8000`; interactive OpenAPI docs are at
+`http://localhost:8000/api/docs`.
+
+### Use Docker Postgres or a host database
 
 ```dotenv
-MUSIC_ENABLED=true
-MUSIC_SERVICE_BASE_URL=https://subramanyas-macbook-air.tail70ba05.ts.net
+# .env
+POSTGRES_MODE=docker  # default: Compose starts Postgres
+
+# Or use an existing local/host database and skip the Compose Postgres service.
+# POSTGRES_MODE=host
+# DATABASE_URL=postgresql+psycopg://USER:PASS@host.docker.internal:5432/DB_NAME
 ```
 
-Get the credential values (`MUSIC_SERVICE_TOKEN`, `MUSIC_SERVICE_HMAC_SECRET`)
-from the music Mac owner and put them in your `.env.music`. Full steps in
-[the local music sidecar guide](docs/guides/local-music-sidecar.md) § 4.
+For a quicker host-service loop, keep infrastructure in Docker and run the
+application processes locally:
 
-## How a generation flows
-
-```
-POST /api/stories
-  -> chain(run_stage x 7)          sequential reasoning stages, queue: agents
-  -> chord(
-       group(tts_line x N,         one task per line,   queue: media
-             gen_image x M,        one task per scene,  queue: media
-             gen_music x 1),       one optional bed,    queue: music
-       assemble)                   ffmpeg composition,  queue: assembly
+```bash
+make infra
+make api
+make agent
+make worker
 ```
 
-Tasks pass a `version_id`, not the state. Each one loads the current
-`StoryState` from the database, does its work, and saves it back, which is what
-makes any individual task safe to retry.
+Run `make help` for every available target.
 
-A regeneration runs the same chain built from a shorter slice of the stage
-registry. "Make line 12 angrier" re-runs emotion tagging for that one line, its
-TTS, and assembly - three steps, not thirty.
+## Configuration at a glance
 
-## Editing a finished episode
-
-The Editor tab makes *cuts* of an episode: a vertical version with big captions
-for Reels, a thirty-second clip of one scene with your own music under it, a
-share link anyone can watch. A cut is a manifest rather than a file, so changing
-it is a `PATCH` and previewing it costs nothing; only exporting queues a render.
-
-Cuts are recomposed from the scene artwork and the per-line audio rather than
-re-cut from `final_video`, because that file has its captions burned in and its
-narration and score already mixed together. Nothing in the editor touches
-`StoryState` or the story's status, so a failed export cannot make a healthy
-story look broken. See [the video editor guide](docs/guides/video-editor.md).
-
-Finished stories also expose three **alternate ending** choices in the listener
-studio. Each choice forks a normal child `StoryVersion` at the penultimate scene
-and re-enters at `story_understanding`, so every later scene, line, asset, and
-mix stays consistent with the new decision while the parent version remains
-unchanged.
-
-## Live progress
-
-Progress reaches the browser over SSE (`GET /api/stories/{id}/events`), fed by a
-capped Redis stream per story (`daastaan:events:{story_id}`). Each frame carries
-its stream id, so `EventSource` replays it in `Last-Event-ID` on reconnect and the
-API resumes from exactly where that client left off - a dropped connection is a
-pause rather than a hole. A client with no such header is sent the whole retained
-log, which is how a page reload mid-run rebuilds what has happened so far.
-
-Events are typed in `daastaan_contracts.events` as a discriminated union, and the
-API publishes that union into its OpenAPI document, so `npm run gen:types` gives
-the frontend real event types rather than `unknown`. Adding an event kind means
-adding a model there; clients ignore types they do not recognise.
-
-What gets reported:
-
-| Event | Carries |
+| Setting | Purpose |
 | --- | --- |
-| `stage` | A stage changed status. Mirrors the `jobs` table. |
-| `stage_progress` | "n of m" for the fan-out stages, so a 40-line TTS run visibly moves. |
-| `stage_preview` | Characters, scene titles and script lines *as the model writes them*. |
-| `stage_tokens` | Output-token count for stages with nothing display-worthy to show. |
-| `asset` / `music_status` / `feedback` / `complete` | Media landed, score degraded, note applied, episode ready. |
+| `OPENAI_API_KEY` | Required for model-backed story generation. |
+| `POSTGRES_MODE` | `docker` starts Compose Postgres; `host` uses the configured `DATABASE_URL`. |
+| `DATABASE_URL` | SQLAlchemy/Postgres connection when using host Postgres or overriding defaults. |
+| `LOCAL_MEDIA_DIR` | Local filesystem location for development media storage. |
+| `WEB_BASE_URL` | Base URL used when minting public share links. |
+| `MUSIC_ENABLED` / `MUSIC_CLIENT_ENABLED` | Enables the optional music stage/client. |
+| `MUSIC_SERVICE_BASE_URL` | Trusted URL of the native music sidecar. Secrets stay in the gitignored `.env.music`. |
+| `LOG_JSON` | Produces structured request logs for Loki/Grafana exploration. |
 
-Previews come from streaming the structured-output call: `ModelGateway.structured`
-streams every completion and reports the partially-parsed object to an `on_delta`
-callback, throttled so a long stage is a handful of publishes rather than one per
-token. `stream_options={"include_usage": True}` is passed for a reason - without it
-a streamed call reports no usage and every reasoning row in the ledger would become
-an estimate.
+Start from [`.env.example`](.env.example) and, when needed,
+[`.env.music.example`](.env.music.example). Do not commit either populated
+environment file.
 
-`GET /api/stories/{id}/jobs` is the polling fallback while the stream is down, and
-it recomputes the same fan-out counts from `media_assets` so the detail survives a
-Redis flush. The WebSocket at `/ws/stories/{id}` reads the same stream and is still
-served for non-browser clients; it accepts `?last_event_id=` in place of the header.
+## Operations and debugging
 
-## Response cache
+```bash
+make tools       # Redis Insight :5540 and Flower :5555
+make observe     # Loki + Grafana :3000 (admin/admin)
+make logs-api    # or logs-agent, logs-worker-media, logs-worker-music, ...
+make ps          # Compose service status
+```
 
-Every paid call is cached by a SHA-256 of its full input - model, parameters and
-prompt - so identical work is never bought twice. The scope is global: keys
-contain no user or story id, which is safe because a hit can only be served to a
-byte-identical request. Text results sit in Redis; audio and images go to the
-object store under a content-addressed key with Redis holding the pointer, so a
-Redis flush costs a re-probe rather than a re-purchase.
+Every HTTP response includes `X-Request-ID`. With `LOG_JSON=true`, use Grafana
+Explore to search the request ID and follow a request across API, agent, worker,
+and assembly logs.
 
-A cache hit still writes a `cost_ledger` row, at zero cost with `cache_hit` set,
-so the admin console can report what the cache saved instead of the spend simply
-being lower with nothing to attribute it to.
+### Response cache
 
-**Regenerations always bypass the cache.** A line respeak reaches TTS with the
-same text, voice and instructions as the take it is replacing, so a read-through
-cache would return that exact take and the regeneration would appear to do
-nothing. `CACHE_ENABLED=false` turns the whole thing off while tuning prompts.
+Paid model work is content-addressed with a SHA-256 of its full input (prompt,
+model, and parameters). Text completions live in Redis; audio/image cache entries
+point to object storage. Cache hits still write a zero-cost ledger entry, so the
+admin console can show both spend and avoided spend.
 
-## Things worth knowing before you change something
+Regeneration bypasses the cache deliberately: a request to respoke a line must
+produce a new take, not retrieve its previous audio.
 
-- **Every paid call goes through `ModelGateway`.** That is what keeps the cost
-  ledger complete and lets the admin panel switch models at runtime. Do not call
-  the OpenAI SDK from a node or a task.
-- **Ids are minted by `daastaan_common.ids`, never by a model.** Object keys and
-  ffmpeg arguments are built from them, so model output never reaches a path or
-  a command line.
-- **Media generation is guarded by `dedupe_key`.** Celery runs with `acks_late`,
-  so a task can be redelivered after it already succeeded; the guard is what
-  stops that from being billed twice.
-- **Databricks is optional everywhere.** `DB_BACKEND` and `STORAGE_BACKEND`
-  switch between Lakebase/UC Volumes and local Postgres/filesystem. Nothing in
-  the runtime path requires a Databricks account.
-- **Regenerate the frontend types after changing a Pydantic schema:**
-  `make types` with the API running.
-- **JSONB columns use `MutableDict`.** SQLAlchemy cannot see an in-place edit to
-  a plain dict, so `version.state_json["key"] = value` would be silently dropped
-  on flush. `_json_column` in `models.py` wraps every JSONB column to make those
-  writes stick; keep new JSONB columns going through it.
-- **A new column needs an entry in `_ADDED_COLUMNS`.** There is no Alembic here.
-  `create_all` adds missing tables but never missing columns, so column
-  additions are replayed at startup as `ALTER TABLE ... ADD COLUMN IF NOT
-  EXISTS` from that list in `db.py`.
-- **A "run" in the admin console is a `StoryVersion`**, derived from `jobs` and
-  `cost_ledger` in `services/api/src/daastaan_api/analytics.py`. The
-  `pipeline_runs` table is legacy and nothing writes to it.
+### Guardrails worth preserving
 
-## Known rough edges
+- Paid calls flow through `ModelGateway`, keeping cost accounting and runtime
+  model controls in one place.
+- IDs are minted by `daastaan_common.ids`, never by a model, before they reach
+  object keys or ffmpeg arguments.
+- Media generation has deduplication guards because Celery may redeliver an
+  acknowledged-late task.
+- New API contracts require regenerated web types: run `make types` with the
+  API running.
+- JSONB columns use `MutableDict`; new schema columns also need the startup
+  migration entry described in `packages/common/.../db.py`.
 
-- `npm audit` reports a js-yaml advisory from `@redocly/openapi-core`, a
-  build-time dependency of the OpenAPI type generator. It pins the version
-  exactly and ignores `overrides`. The generator only ever parses our own
-  `openapi.json`, so it is not reachable by user input.
-- **The Python virtualenv lives at `~/.venvs/daastaan`, not in the repo.** This
-  checkout sits in an iCloud-synced Desktop folder, and iCloud kept re-applying
-  the macOS "hidden" flag to the editable-install `.pth` files. Python's `site`
-  module skips hidden `.pth` files, so workspace packages would intermittently
-  fail to import with a confusing `ModuleNotFoundError`. The Makefile sets
-  `UV_PROJECT_ENVIRONMENT` to keep the environment out of the synced tree, so
-  use `make` targets rather than bare `uv run`, or export that variable
-  yourself. Moving the repo somewhere outside iCloud would remove the need for
-  this entirely, and would also stop iCloud from syncing `node_modules`.
-- Prices in `services/agent/src/daastaan_agent/pricing.py` are estimates. Check
-  them against current OpenAI pricing before trusting the budget dashboard.
+## Quality checks
+
+```bash
+make lint       # Ruff, mypy (non-blocking), and workspace lint
+make test       # Python test suite
+make check      # CI-style Python checks, tests, and JavaScript build
+npm run build   # Build all JavaScript workspaces
+```
+
+The project includes focused tests for story versions, regeneration scope,
+progress streams, ingest/OCR, casting, alternate endings, Story DNA, plot-hole
+checks, the music boundary, video editing, exports, and share-link behaviour.
+
+## Further reading
+
+- [Video editor guide](docs/guides/video-editor.md)
+- [Local music sidecar guide](docs/guides/local-music-sidecar.md)
+- [Local music service specification](docs/specs/local-stable-audio-music-service.md)
+- [Merged feature handoff](docs/handoff/2026-07-26-parallel-features.md)
+- [API documentation](http://localhost:8000/api/docs) when the stack is running
+
+## Known constraints
+
+- The optional music sidecar is designed for a trusted Apple-Silicon host; it
+  is intentionally isolated from the main Docker image and general service
+  credentials.
+- Video editing requires scene artwork and per-line audio, because cuts are
+  recomposed from source media rather than altering a burned-in final video.
+- Model pricing values used by the admin budget dashboard are estimates; review
+  them before using the dashboard for accounting decisions.
