@@ -80,6 +80,13 @@ _ADDED_COLUMNS: tuple[tuple[str, str, str], ...] = (
     ("feedback", "status", "VARCHAR NOT NULL DEFAULT 'pending'"),
     ("feedback", "error", "VARCHAR"),
     ("cost_ledger", "cache_hit", "BOOLEAN NOT NULL DEFAULT FALSE"),
+    ("stories", "review_status", "VARCHAR NOT NULL DEFAULT 'pending'"),
+    ("stories", "review_note", "TEXT"),
+    ("stories", "reviewed_by", "VARCHAR"),
+    ("stories", "reviewed_at", "TIMESTAMP WITH TIME ZONE"),
+    ("stories", "review_status_before_flag", "VARCHAR"),
+    ("stories", "review_note_before_flag", "TEXT"),
+    ("stories", "status_before_flag", "VARCHAR"),
 )
 
 

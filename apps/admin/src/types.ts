@@ -130,6 +130,17 @@ export type AdminSetting = {
   updated_at: string
 }
 
+/** An operator action recorded by the API's append-only audit log. */
+export type AuditEvent = {
+  id?: string
+  actor_user_id?: string | null
+  action: string
+  target_type?: string | null
+  target_id?: string | null
+  metadata?: Record<string, unknown> | null
+  created_at?: string
+}
+
 /** Stage identifiers are snake_case in the database; charts want them readable. */
 export function prettyStage(stage: string) {
   return stage.replace(/_/g, ' ').replace(/^./, (c) => c.toUpperCase())

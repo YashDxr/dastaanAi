@@ -8,8 +8,8 @@ contract and neither React app hand-writes an interface.
 from datetime import datetime
 from typing import Any, Literal
 
-from daastaan_contracts import ConsistencyCheckStatus, ConsistencyFinding, Scope, StageName, VideoEditManifest, limits
-from pydantic import BaseModel, EmailStr, Field
+from daastaan_contracts import ConsistencyCheckStatus, ConsistencyFinding, ReviewAction, ReviewStatus, Scope, StageName, VideoEditManifest, limits
+from pydantic import BaseModel, EmailStr, Field, model_validator
 
 # --- auth ------------------------------------------------------------------
 
@@ -390,6 +390,10 @@ class ConsistencyCheckOut(BaseModel):
 
 class AdminSettingIn(BaseModel):
     value: dict[str, Any]
+    # A short operator note makes an otherwise opaque runtime change useful in
+    # the audit trail without ever accepting secrets or arbitrary free-form
+    # configuration as a separate field.
+    reason: str | None = Field(default=None, max_length=500)
 
 
 class AdminSettingOut(BaseModel):
@@ -421,6 +425,86 @@ class CostSummaryOut(BaseModel):
 
 class RoleUpdate(BaseModel):
     role: str
+
+
+class StoryReviewRequest(BaseModel):
+    """An intentionally narrow set of reversible editorial transitions."""
+
+    action: ReviewAction
+    note: str | None = Field(default=None, max_length=2_000)
+
+    @model_validator(mode="after")
+    def require_actionable_note(self) -> "StoryReviewRequest":
+        self.note = self.note.strip() if self.note else None
+        if self.action in {ReviewAction.FLAG, ReviewAction.CHANGES_REQUESTED} and not self.note:
+            raise ValueError("a note is required when flagging or requesting changes")
+        return self
+
+
+class StoryReviewOut(BaseModel):
+    status: ReviewStatus
+    note: str | None
+    reviewed_by: str | None
+    reviewed_at: datetime | None
+
+
+class AdminStoryOwnerOut(BaseModel):
+    id: str
+    email: str
+
+
+class AssetCoverageOut(BaseModel):
+    """One asset family measured against what the current version needs."""
+
+    kind: str
+    expected: int
+    complete: int
+    missing: int
+    placeholders: int
+    required: bool
+
+
+class StoryQualityOut(BaseModel):
+    version_id: str | None
+    state_available: bool
+    # ``ready_for_review`` is an asset-quality gate, not a publication action.
+    # It is safe to inspect a flagged story; approval is still an explicit write.
+    ready_for_review: bool
+    required_missing: int
+    placeholder_count: int
+    coverage: list[AssetCoverageOut]
+    warnings: list[str]
+
+
+class AdminStorySummaryOut(BaseModel):
+    id: str
+    title: str | None
+    status: str
+    current_version_id: str | None
+    flagged: bool
+    created_at: datetime
+    owner: AdminStoryOwnerOut | None
+    review: StoryReviewOut
+    quality: StoryQualityOut
+
+
+class AuditLogOut(BaseModel):
+    id: str
+    actor_user_id: str | None
+    action: str
+    target_type: str | None
+    target_id: str | None
+    metadata: dict[str, Any] | None
+    created_at: datetime
+
+
+class AdminStoryDetailOut(AdminStorySummaryOut):
+    version: VersionOut | None
+    # Admins need the script/state to make an editorial decision. This endpoint
+    # remains behind ``require_admin`` and never appears in listener responses.
+    state: dict[str, Any] | None
+    assets: list[AssetOut]
+    review_history: list[AuditLogOut]
 
 
 # --- admin analytics --------------------------------------------------------

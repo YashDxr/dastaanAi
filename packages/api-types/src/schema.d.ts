@@ -438,10 +438,68 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** List All Stories */
+        /**
+         * List All Stories
+         * @description The operator review queue, newest first.
+         *
+         *     Asset coverage is calculated against the *current* immutable version rather
+         *     than the story's global asset history, so a previous branch can never make a
+         *     newly-regenerated episode look ready by accident.
+         */
         get: operations["list_all_stories_api_admin_stories_get"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/stories/{story_id}/quality": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Story Quality */
+        get: operations["get_story_quality_api_admin_stories__story_id__quality_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/stories/{story_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Admin Story */
+        get: operations["get_admin_story_api_admin_stories__story_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/stories/{story_id}/review": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Review Story */
+        post: operations["review_story_api_admin_stories__story_id__review_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -457,7 +515,14 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Flag Story */
+        /**
+         * Flag Story
+         * @description Compatibility route for the original one-click moderation control.
+         *
+         *     New clients should use ``/review`` because it requires a reviewer note for
+         *     flags. This endpoint remains reversible and produces the same rich audit
+         *     event, but it marks the action as legacy so operators can distinguish it.
+         */
         post: operations["flag_story_api_admin_stories__story_id__flag_post"];
         delete?: never;
         options?: never;
@@ -668,6 +733,8 @@ export interface components {
             value: {
                 [key: string]: unknown;
             };
+            /** Reason */
+            reason?: string | null;
         };
         /** AdminSettingOut */
         AdminSettingOut: {
@@ -685,6 +752,64 @@ export interface components {
              */
             updated_at: string;
         };
+        /** AdminStoryDetailOut */
+        AdminStoryDetailOut: {
+            /** Id */
+            id: string;
+            /** Title */
+            title: string | null;
+            /** Status */
+            status: string;
+            /** Current Version Id */
+            current_version_id: string | null;
+            /** Flagged */
+            flagged: boolean;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            owner: components["schemas"]["AdminStoryOwnerOut"] | null;
+            review: components["schemas"]["StoryReviewOut"];
+            quality: components["schemas"]["StoryQualityOut"];
+            version: components["schemas"]["VersionOut"] | null;
+            /** State */
+            state: {
+                [key: string]: unknown;
+            } | null;
+            /** Assets */
+            assets: components["schemas"]["AssetOut"][];
+            /** Review History */
+            review_history: components["schemas"]["AuditLogOut"][];
+        };
+        /** AdminStoryOwnerOut */
+        AdminStoryOwnerOut: {
+            /** Id */
+            id: string;
+            /** Email */
+            email: string;
+        };
+        /** AdminStorySummaryOut */
+        AdminStorySummaryOut: {
+            /** Id */
+            id: string;
+            /** Title */
+            title: string | null;
+            /** Status */
+            status: string;
+            /** Current Version Id */
+            current_version_id: string | null;
+            /** Flagged */
+            flagged: boolean;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            owner: components["schemas"]["AdminStoryOwnerOut"] | null;
+            review: components["schemas"]["StoryReviewOut"];
+            quality: components["schemas"]["StoryQualityOut"];
+        };
         /** AssetCountOut */
         AssetCountOut: {
             /** Kind */
@@ -693,6 +818,24 @@ export interface components {
             count: number;
             /** Duration Ms */
             duration_ms: number;
+        };
+        /**
+         * AssetCoverageOut
+         * @description One asset family measured against what the current version needs.
+         */
+        AssetCoverageOut: {
+            /** Kind */
+            kind: string;
+            /** Expected */
+            expected: number;
+            /** Complete */
+            complete: number;
+            /** Missing */
+            missing: number;
+            /** Placeholders */
+            placeholders: number;
+            /** Required */
+            required: boolean;
         };
         /** AssetOut */
         AssetOut: {
@@ -711,27 +854,27 @@ export interface components {
             /** Url */
             url: string;
         };
-        /** AuditLog */
-        AuditLog: {
+        /** AuditLogOut */
+        AuditLogOut: {
             /** Id */
-            id?: string;
+            id: string;
             /** Actor User Id */
-            actor_user_id?: string | null;
+            actor_user_id: string | null;
             /** Action */
             action: string;
             /** Target Type */
-            target_type?: string | null;
+            target_type: string | null;
             /** Target Id */
-            target_id?: string | null;
-            /** Metadata Json */
-            metadata_json?: {
+            target_id: string | null;
+            /** Metadata */
+            metadata: {
                 [key: string]: unknown;
             } | null;
             /**
              * Created At
              * Format: date-time
              */
-            created_at?: string;
+            created_at: string;
         };
         /** Body_upload_api_ingest_post */
         Body_upload_api_ingest_post: {
@@ -1059,6 +1202,23 @@ export interface components {
             /** Expected Current Version Id */
             expected_current_version_id?: string | null;
         };
+        /**
+         * ReviewAction
+         * @description The small, explicit review transition surface available to admins.
+         * @enum {string}
+         */
+        ReviewAction: "approve" | "flag" | "changes_requested" | "clear_flag";
+        /**
+         * ReviewStatus
+         * @description Editorial state, deliberately separate from the generation lifecycle.
+         *
+         *     A story can be technically ``ready`` while an operator still needs changes
+         *     before it is released. Keeping that decision out of :class:`StoryStatus`
+         *     makes the review queue reversible without confusing workers about whether a
+         *     pipeline run succeeded.
+         * @enum {string}
+         */
+        ReviewStatus: "pending" | "approved" | "flagged" | "changes_requested";
         /** RoleUpdate */
         RoleUpdate: {
             /** Role */
@@ -1270,6 +1430,42 @@ export interface components {
              */
             created_at: string;
         };
+        /** StoryQualityOut */
+        StoryQualityOut: {
+            /** Version Id */
+            version_id: string | null;
+            /** State Available */
+            state_available: boolean;
+            /** Ready For Review */
+            ready_for_review: boolean;
+            /** Required Missing */
+            required_missing: number;
+            /** Placeholder Count */
+            placeholder_count: number;
+            /** Coverage */
+            coverage: components["schemas"]["AssetCoverageOut"][];
+            /** Warnings */
+            warnings: string[];
+        };
+        /** StoryReviewOut */
+        StoryReviewOut: {
+            status: components["schemas"]["ReviewStatus"];
+            /** Note */
+            note: string | null;
+            /** Reviewed By */
+            reviewed_by: string | null;
+            /** Reviewed At */
+            reviewed_at: string | null;
+        };
+        /**
+         * StoryReviewRequest
+         * @description An intentionally narrow set of reversible editorial transitions.
+         */
+        StoryReviewRequest: {
+            action: components["schemas"]["ReviewAction"];
+            /** Note */
+            note?: string | null;
+        };
         /** StorySpendOut */
         StorySpendOut: {
             /** Story Id */
@@ -1281,6 +1477,11 @@ export interface components {
             /** Calls */
             calls: number;
         };
+        /**
+         * StoryStatus
+         * @enum {string}
+         */
+        StoryStatus: "draft" | "generating" | "ready" | "failed" | "flagged";
         /** UserCostDetailOut */
         UserCostDetailOut: {
             user: components["schemas"]["UserSummaryOut"];
@@ -2276,7 +2477,12 @@ export interface operations {
     };
     list_all_stories_api_admin_stories_get: {
         parameters: {
-            query?: never;
+            query?: {
+                review_status?: components["schemas"]["ReviewStatus"] | null;
+                flagged?: boolean | null;
+                story_status?: components["schemas"]["StoryStatus"] | null;
+                limit?: number;
+            };
             header?: never;
             path?: never;
             cookie?: never;
@@ -2289,7 +2495,113 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["StoryOut"][];
+                    "application/json": components["schemas"]["AdminStorySummaryOut"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_story_quality_api_admin_stories__story_id__quality_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                story_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StoryQualityOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_admin_story_api_admin_stories__story_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                story_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminStoryDetailOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    review_story_api_admin_stories__story_id__review_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                story_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["StoryReviewRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminStorySummaryOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
@@ -2311,7 +2623,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["StoryOut"];
+                    "application/json": components["schemas"]["AdminStorySummaryOut"];
                 };
             };
             /** @description Validation Error */
@@ -2405,7 +2717,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["AuditLog"][];
+                    "application/json": components["schemas"]["AuditLogOut"][];
                 };
             };
             /** @description Validation Error */

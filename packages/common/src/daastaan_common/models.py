@@ -81,6 +81,19 @@ class Story(SQLModel, table=True):
     status: str = Field(default="draft", index=True)
     current_version_id: str | None = Field(default=None, index=True)
     flagged: bool = Field(default=False, index=True)
+    # Review state is intentionally distinct from the generation lifecycle in
+    # ``status``. A completed episode can need editorial changes without being
+    # treated as a failed pipeline run by the listener experience or workers.
+    review_status: str = Field(default="pending", index=True)
+    review_note: str | None = None
+    reviewed_by: str | None = Field(default=None, index=True)
+    reviewed_at: datetime | None = None
+    # A flag is reversible: retain both the prior editorial decision and the
+    # pipeline state so clearing a flag does not accidentally release a story
+    # that was still draft/failed before it was reviewed.
+    review_status_before_flag: str | None = None
+    review_note_before_flag: str | None = None
+    status_before_flag: str | None = None
     created_at: datetime = Field(default_factory=_now)
 
 
