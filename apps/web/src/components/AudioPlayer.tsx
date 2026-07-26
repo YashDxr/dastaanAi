@@ -256,6 +256,9 @@ export function AudioPlayer({
         onLoadedMetadata={() => {
           const value = audioRef.current?.duration
           setDuration(Number.isFinite(value) ? (value as number) : 0)
+          // Loading a source resets the rate, so a rebuilt mix would silently
+          // drop back to 1x mid-episode without this.
+          if (audioRef.current) audioRef.current.playbackRate = playbackRate
           applyPendingSeek()
         }}
         onEnded={() => {
@@ -288,12 +291,13 @@ export function AudioPlayer({
         >
           {playing ? 'Pause' : 'Play'}
         </button>
-        <div className="speed-controls">
+        <div className="speed-controls" role="group" aria-label="Playback speed">
           {[0.75, 1, 1.25, 1.5, 2].map((rate) => (
             <button
               key={rate}
               type="button"
               className={`speed-btn${playbackRate === rate ? ' active' : ''}`}
+              aria-pressed={playbackRate === rate}
               onClick={() => {
                 setPlaybackRate(rate)
                 if (audioRef.current) audioRef.current.playbackRate = rate
