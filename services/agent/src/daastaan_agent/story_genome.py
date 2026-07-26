@@ -9,7 +9,7 @@ This module sits beside the main pipeline and never enters `STAGE_NODES`.
 
 import structlog
 from daastaan_contracts import StoryState
-from daastaan_contracts.models import StoryGenomeResult
+from daastaan_contracts.models import StoryGenomeResult, StoryGenomeSynthesis
 
 from .gateway import ModelGateway
 
@@ -121,8 +121,8 @@ def analyze_genome(state: StoryState, gateway: ModelGateway) -> StoryGenomeResul
     stats = _compute_stats(state)
     payload = _genome_payload(state, stats)
 
-    result = gateway.structured(
-        schema=StoryGenomeResult,
+    synthesis = gateway.structured(
+        schema=StoryGenomeSynthesis,
         system=_SYSTEM,
         user_content=(
             f"Analyse the DNA of this story:\n\n"
@@ -132,9 +132,8 @@ def analyze_genome(state: StoryState, gateway: ModelGateway) -> StoryGenomeResul
         temperature=0.7,
     )
 
-    # Override the LLM's dialogue_ratio and character_balance with our
-    # precisely computed values
-    result.dialogue_ratio = stats["dialogue_ratio"]
-    result.character_balance = stats["character_balance"]
-
-    return result
+    return StoryGenomeResult(
+        **synthesis.model_dump(),
+        dialogue_ratio=stats["dialogue_ratio"],
+        character_balance=stats["character_balance"],
+    )
