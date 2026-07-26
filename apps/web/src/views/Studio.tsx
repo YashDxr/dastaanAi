@@ -4,6 +4,7 @@ import { AlternateEndings } from '../components/AlternateEndings'
 import { AudioPlayer } from '../components/AudioPlayer'
 import { CliffhangerPanel } from '../components/CliffhangerPanel'
 import { VideoPlayer, VideoPlayerEmpty } from '../components/VideoPlayer'
+import { DirectorControls } from '../components/DirectorControls'
 import { FeedbackComposer } from '../components/FeedbackComposer'
 import { ConsistencyPanel } from '../components/ConsistencyPanel'
 import { ProgressStepper } from '../components/ProgressStepper'
@@ -387,6 +388,13 @@ export function Studio({ user, storyId, tab, onTab, onLogout, onHome, onCompose 
                     await storiesApi.feedback(storyId, text)
                     await refresh()
                   }}
+                />
+                <DirectorControls
+                  storyId={storyId}
+                  state={state ?? null}
+                  busy={busy}
+                  regenerating={regenerating}
+                  onRegenerated={refresh}
                 />
               </div>
 
