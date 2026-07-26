@@ -96,6 +96,17 @@ def dispatch_bgm_export(*, version_id: str, user_id: str, fmt: str) -> str:
     return task.id
 
 
+def dispatch_video_export(*, version_id: str, user_id: str, fmt: str) -> str:
+    task = celery_app.send_task(
+        TaskName.EXPORT_VIDEO.value,
+        kwargs={"version_id": version_id, "user_id": user_id, "fmt": fmt},
+        queue=Queue.ASSEMBLY.value,
+        headers=_task_headers(),
+    )
+    log.info("dispatched_video_export", version_id=version_id, fmt=fmt, task_id=task.id)
+    return task.id
+
+
 def dispatch_video_edit_render(*, edit_id: str, user_id: str) -> str:
     task = celery_app.send_task(
         TaskName.RENDER_VIDEO_EDIT.value,

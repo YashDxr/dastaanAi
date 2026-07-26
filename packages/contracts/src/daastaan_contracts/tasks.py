@@ -32,6 +32,7 @@ class TaskName(StrEnum):
     INGEST_EXTRACT = "daastaan.ingest.extract"
     EXPORT_AUDIO = "daastaan.export.audio"
     EXPORT_BGM = "daastaan.export.bgm"
+    EXPORT_VIDEO = "daastaan.export.video"
     RENDER_VIDEO_EDIT = "daastaan.video.render_edit"
     WRITERS_ROOM = "daastaan.analysis.writers_room"
     CLIFFHANGER = "daastaan.analysis.cliffhanger"

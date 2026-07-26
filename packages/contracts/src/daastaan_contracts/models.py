@@ -367,11 +367,25 @@ class StoryConcept(Strict):
     why_similar: str
 
 
-class StoryGenomeResult(Strict):
+# The docstring below is sent to the model as the schema description, so the
+# reasoning for the split lives out here instead. `dialogue_ratio` and
+# `character_balance` are counted from `StoryState` and are deliberately absent:
+# beyond preferring arithmetic to a language model, `character_balance` is a
+# name-keyed map, and structured outputs cannot express an open-ended object —
+# asking for it fails the entire request rather than just that one field.
+class StoryGenomeSynthesis(Strict):
+    """The judged half of a story's DNA: its traits, arc shape, pacing, and the
+    concepts that share its emotional signature."""
+
     traits: list[GenomeTrait]
     arc_shape: str              # "classic three-act", "in medias res", etc.
     pacing_profile: str
-    dialogue_ratio: float
-    character_balance: dict[str, float]  # character name -> % of lines
     concepts: list[StoryConcept]
     summary: str
+
+
+class StoryGenomeResult(StoryGenomeSynthesis):
+    """The synthesis joined with the metrics we computed ourselves."""
+
+    dialogue_ratio: float
+    character_balance: dict[str, float]  # character name -> % of lines

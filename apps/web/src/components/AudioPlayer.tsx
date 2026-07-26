@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { BgmPanel } from './BgmPanel'
 import { ExportPanel } from './ExportPanel'
+import { VideoExportPanel } from './VideoExportPanel'
 import type { Asset, DialogueLine } from '../types'
 
 const DOWNLOAD_ICON = (
@@ -55,6 +56,8 @@ type Props = {
   storyId?: string
   /** Show the BGM download option when a music bed has been generated. */
   hasMusicBed?: boolean
+  /** Show the video download option once the pipeline has rendered one. */
+  hasVideo?: boolean
 }
 
 function formatTime(seconds: number) {
@@ -95,6 +98,7 @@ export function AudioPlayer({
   regenerating = false,
   storyId,
   hasMusicBed = false,
+  hasVideo = false,
 }: Props) {
   const liveEpisode = useMemo(
     () => assets.find((a) => a.kind === 'final_episode') ?? null,
@@ -113,6 +117,7 @@ export function AudioPlayer({
   const [playing, setPlaying] = useState(false)
   const [current, setCurrent] = useState(0)
   const [duration, setDuration] = useState(0)
+  const [playbackRate, setPlaybackRate] = useState(1)
   // Non-null only while the user is dragging the scrubber. Holding the thumb
   // position here stops `timeupdate` from yanking it back under the cursor.
   const [scrub, setScrub] = useState<number | null>(null)
@@ -255,6 +260,9 @@ export function AudioPlayer({
         onLoadedMetadata={() => {
           const value = audioRef.current?.duration
           setDuration(Number.isFinite(value) ? (value as number) : 0)
+          // Loading a source resets the rate, so a rebuilt mix would silently
+          // drop back to 1x mid-episode without this.
+          if (audioRef.current) audioRef.current.playbackRate = playbackRate
           applyPendingSeek()
         }}
         onEnded={() => {
@@ -266,6 +274,7 @@ export function AudioPlayer({
         onPlay={() => {
           playingRef.current = true
           setPlaying(true)
+          if (audioRef.current) audioRef.current.playbackRate = playbackRate
         }}
         onPause={() => {
           playingRef.current = false
@@ -286,6 +295,22 @@ export function AudioPlayer({
         >
           {playing ? 'Pause' : 'Play'}
         </button>
+        <div className="speed-controls" role="group" aria-label="Playback speed">
+          {[0.75, 1, 1.25, 1.5, 2].map((rate) => (
+            <button
+              key={rate}
+              type="button"
+              className={`speed-btn${playbackRate === rate ? ' active' : ''}`}
+              aria-pressed={playbackRate === rate}
+              onClick={() => {
+                setPlaybackRate(rate)
+                if (audioRef.current) audioRef.current.playbackRate = rate
+              }}
+            >
+              {rate}x
+            </button>
+          ))}
+        </div>
         <div className="scrubber">
           <input
             type="range"
@@ -317,7 +342,14 @@ export function AudioPlayer({
           </div>
         </div>
       </div>
-      {storyId && <DownloadsSection storyId={storyId} episodeReady={!!liveEpisode} hasMusicBed={hasMusicBed} />}
+      {storyId && (
+        <DownloadsSection
+          storyId={storyId}
+          episodeReady={!!liveEpisode}
+          hasMusicBed={hasMusicBed}
+          hasVideo={hasVideo}
+        />
+      )}
     </section>
   )
 }
@@ -330,14 +362,16 @@ function DownloadsSection({
   storyId,
   episodeReady,
   hasMusicBed,
+  hasVideo,
 }: {
   storyId: string
   episodeReady: boolean
   hasMusicBed: boolean
+  hasVideo: boolean
 }) {
   const [open, setOpen] = useState(false)
 
-  if (!episodeReady && !hasMusicBed) return null
+  if (!episodeReady && !hasMusicBed && !hasVideo) return null
 
   return (
     <div className="downloads-section">
@@ -367,6 +401,13 @@ function DownloadsSection({
             <div className="download-group">
               <p className="download-group-heading">Background Score</p>
               <BgmPanel storyId={storyId} inline />
+            </div>
+          )}
+
+          {hasVideo && (
+            <div className="download-group">
+              <p className="download-group-heading">Episode Video</p>
+              <VideoExportPanel storyId={storyId} inline />
             </div>
           )}
         </div>

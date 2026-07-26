@@ -7,6 +7,7 @@ import wave
 
 import pytest
 from daastaan_agent.assembly import (
+    VIDEO_EXPORTS,
     AssemblyError,
     Clip,
     SceneFrame,
@@ -14,6 +15,7 @@ from daastaan_agent.assembly import (
     compose_episode,
     compose_video,
     probe_duration_ms,
+    transcode_video,
 )
 
 # --- helpers --------------------------------------------------------------
@@ -173,3 +175,54 @@ def test_compose_episode_mixes_a_valid_wav_music_bed():
     episode = compose_episode([Clip(audio=_silent_mp3())], music_bed=_silent_wav())
     assert episode
     assert probe_duration_ms(episode) > 0
+
+
+# --- transcode_video ------------------------------------------------------
+
+
+# The first bytes that identify each container, so a passing test means ffmpeg
+# actually wrote the format that was asked for rather than merely exiting 0.
+_CONTAINER_SIGNATURES = {
+    "mov": lambda data: b"ftyp" in data[:12],
+    "mkv": lambda data: data.startswith(b"\x1a\x45\xdf\xa3"),
+    "webm": lambda data: data.startswith(b"\x1a\x45\xdf\xa3"),
+}
+
+
+@pytest.mark.parametrize("fmt", ["mp4", "avi", "gif", ""])
+def test_a_video_format_off_the_table_is_refused(fmt):
+    """`mp4` is refused with the rest: it is the master, and callers serve the
+    stored asset rather than asking for a copy of it."""
+    with pytest.raises(AssemblyError, match="unsupported video export format"):
+        transcode_video(b"video", fmt)
+
+
+@pytest.mark.skipif(
+    shutil.which("ffmpeg") is None,
+    reason="ffmpeg not installed",
+)
+class TestTranscodeVideo:
+    """Every row of VIDEO_EXPORTS is a real ffmpeg command line, and a bad flag in
+    one of them only surfaces when somebody picks that format. The host laptop may
+    skip this; the Docker image ships ffmpeg, so CI covers it.
+    """
+
+    def _master(self) -> bytes:
+        return compose_video(
+            _silent_mp3(),
+            [SceneFrame(image=_minimal_png(), duration_ms=500, scene_id="s1")],
+        )
+
+    @pytest.mark.parametrize("fmt", sorted(VIDEO_EXPORTS))
+    def test_every_offered_format_is_produced(self, fmt):
+        result = transcode_video(self._master(), fmt)
+
+        assert _CONTAINER_SIGNATURES[fmt](result)
+
+    def test_a_remux_keeps_the_encoded_streams(self):
+        """MOV is `-c copy`, so it should land far closer to the master's size
+        than a re-encode would. A silent regression to re-encoding would be a
+        quality loss nobody asked for."""
+        master = self._master()
+
+        assert len(transcode_video(master, "mov")) == pytest.approx(len(master), rel=0.5)
