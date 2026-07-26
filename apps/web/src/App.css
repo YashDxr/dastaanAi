@@ -962,6 +962,27 @@
   animation: rise 0.65s var(--ease) both;
 }
 
+/* A heading block on the left, at most one action on the right. Panels used the
+   class before it had any rules, so the action fell underneath the heading and
+   sat flush against the panel's left edge. */
+.section-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem 1.25rem;
+  flex-wrap: wrap;
+}
+
+/* Wraps under the heading rather than squeezing it into a column of two words. */
+.section-head > div {
+  flex: 1 1 20rem;
+  min-width: 0;
+}
+
+.section-head > .btn {
+  flex: none;
+}
+
 .progress-top {
   display: flex;
   justify-content: space-between;
@@ -1771,10 +1792,6 @@
 
 /* Plot Hole Hunter ------------------------------------------------------ */
 
-.consistency-head {
-  align-items: flex-start;
-}
-
 .consistency-head .muted {
   margin: 0.45rem 0 0;
   max-width: 42rem;
@@ -1895,6 +1912,19 @@
   font-size: 0.92rem;
 }
 
+/* Revisions tab --------------------------------------------------------- */
+
+/* Three independent panels are stacked here, and nothing owned the space
+   between them: they sat flush against each other and against the tab bar,
+   reading as one undivided wall. Matches the offset and gap the other tabs get
+   from `.studio-grid` and `.analysis-panel`. */
+.revisions-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+  margin-top: 1.25rem;
+}
+
 /* Story Time Machine ---------------------------------------------------- */
 
 .time-machine-head {
@@ -1902,6 +1932,10 @@
   grid-template-columns: minmax(0, 1fr) minmax(14rem, 0.9fr);
   align-items: end;
   gap: 1rem;
+}
+
+.time-machine-head > * {
+  min-width: 0;
 }
 
 .time-machine-head h2 {
@@ -1982,6 +2016,9 @@
   padding-bottom: 0;
 }
 
+/* Centred on the numbered marker inside the card beside it (0.8rem of card
+   padding plus half of the 1.65rem marker), so the spine reads as one line of
+   beads rather than dots floating above each number. */
 .story-timeline > li::before {
   background: var(--paper);
   border: 2px solid var(--line);
@@ -1990,7 +2027,7 @@
   height: 0.58rem;
   left: -0.34rem;
   position: absolute;
-  top: 1rem;
+  top: 1.335rem;
   width: 0.58rem;
 }
 
@@ -2061,13 +2098,17 @@
   margin-top: 0.16rem;
 }
 
+/* Indented to the scene title, not the scene card: the marker column is
+   0.8rem of padding + a 1.65rem marker + a 0.7rem gap, and `.timeline-line`
+   adds its own 0.4rem. Lining these up is what makes the lines read as
+   belonging to the scene above them. */
 .timeline-lines {
   display: flex;
   flex-direction: column;
   gap: 0.2rem;
   list-style: none;
   margin: 0.45rem 0 0;
-  padding: 0 0 0 0.4rem;
+  padding: 0 0 0 2.75rem;
 }
 
 .timeline-line {
@@ -2157,9 +2198,21 @@
   margin: 1rem 0 0;
 }
 
+/* The cards hold descriptions of different lengths. Letting the grid row size
+   them and stretching each button to fill its cell keeps the three bottom edges
+   level without a fixed height that leaves dead space under the short one. */
+.alternate-endings-list li {
+  display: flex;
+}
+
 .alternate-ending-choice {
   width: 100%;
-  min-height: 7.2rem;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  /* A button centres its content, which would float the titles of the three
+     cards to three different heights once they stretch. */
+  justify-content: flex-start;
   text-align: left;
   border: 1px solid var(--line);
   border-radius: 10px;
@@ -2939,6 +2992,20 @@
   border-bottom: 1px solid var(--line);
 }
 
+/* `.btn.small` carries `align-self: flex-start` and a top margin for the
+   stacked panels it was written for. Every row below aligns its own children,
+   so there both properties are pure damage: they push the button out of the row
+   and down by half a rem. `.export-list` already needs the same reset. */
+.editor-head .btn.small,
+.editor-cuts .btn.small,
+.editor-transport .btn.small,
+.editor-trim-actions .btn.small,
+.editor-clips .btn.small,
+.editor-share-link .btn.small {
+  align-self: auto;
+  margin-top: 0;
+}
+
 /* The stage is wide because typography is judged at size; the controls are a
    fixed column so a slider does not change length when the window does. */
 .editor-body {
@@ -3638,10 +3705,6 @@
   .alternate-endings-list {
     grid-template-columns: 1fr;
   }
-
-  .alternate-ending-choice {
-    min-height: 0;
-  }
 }
 
 @media (max-width: 560px) {
@@ -3670,6 +3733,12 @@
   .time-machine-head {
     align-items: stretch;
     grid-template-columns: 1fr;
+  }
+
+  /* Aligning to the scene title costs more than it is worth once the line text
+     has only a few words per row. */
+  .timeline-lines {
+    padding-left: 1rem;
   }
 
   .time-machine-actions {
