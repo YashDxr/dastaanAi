@@ -124,14 +124,18 @@ cp .env.music.example .env.music
 # Run the native MLX sidecar on the music host.
 make music-service
 
-# In .env, enable the optional client and point it at that trusted service.
+# Same Mac (Docker Desktop):
 # MUSIC_ENABLED=true
-# MUSIC_CLIENT_ENABLED=true
 # MUSIC_SERVICE_BASE_URL=http://host.docker.internal:8787
+
+# Teammate on another Mac (personal Tailscale tailnet):
+# MUSIC_ENABLED=true
+# MUSIC_SERVICE_BASE_URL=https://subramanyas-macbook-air.tail64d7ec.ts.net
 ```
 
-The full setup and security model are in
-[the local music sidecar guide](docs/guides/local-music-sidecar.md).
+Join the music host's personal Tailscale account (invite from
+`subramanya11rao@gmail.com`), then follow
+[the local music sidecar guide](docs/guides/local-music-sidecar.md) § 4.
 
 > **Note:** the Scenes tab also includes an ambience-planning interface. It is
 > intentionally labelled planning-only; ambient audio is not currently rendered
