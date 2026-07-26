@@ -1687,6 +1687,556 @@
   padding: 2rem 0;
 }
 
+/* Editor ---------------------------------------------------------------- */
+
+.editor-invite {
+  display: flex;
+  gap: 1.25rem;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  margin-top: 1rem;
+  padding: 1rem 1.15rem;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: linear-gradient(
+    100deg,
+    color-mix(in srgb, var(--teal) 8%, transparent),
+    var(--panel)
+  );
+}
+
+.editor-invite .muted {
+  margin: 0.3rem 0 0;
+  max-width: 46ch;
+}
+
+.editor {
+  display: flex;
+  flex-direction: column;
+  gap: 1.1rem;
+  padding-top: 1.4rem;
+}
+
+.editor-head {
+  display: flex;
+  gap: 1rem;
+  align-items: flex-start;
+  justify-content: space-between;
+  flex-wrap: wrap;
+}
+
+.editor-head h2 {
+  font-family: var(--display);
+  font-size: 1.55rem;
+  margin: 0.2rem 0 0.35rem;
+}
+
+.editor-head .muted {
+  margin: 0;
+}
+
+.editor-cuts {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+  flex-wrap: wrap;
+  padding-bottom: 0.9rem;
+  border-bottom: 1px solid var(--line);
+}
+
+/* The stage is wide because typography is judged at size; the controls are a
+   fixed column so a slider does not change length when the window does. */
+.editor-body {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 21rem;
+  gap: 1.35rem;
+  align-items: start;
+}
+
+.editor-stage-column,
+.editor-controls {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  min-width: 0;
+}
+
+.editor-panel {
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--panel);
+  padding: 1.05rem 1.15rem;
+  box-shadow: var(--shadow);
+  display: flex;
+  flex-direction: column;
+  gap: 0.85rem;
+}
+
+.editor-empty {
+  gap: 0.5rem;
+}
+
+.editor-empty h2 {
+  font-family: var(--display);
+  font-size: 1.3rem;
+  margin: 0;
+}
+
+.editor-empty .muted,
+.editor-hint {
+  margin: 0;
+  max-width: 60ch;
+  font-size: 0.86rem;
+}
+
+/* Preview --------------------------------------------------------------- */
+
+.editor-preview {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.editor-preview-head {
+  display: flex;
+  gap: 0.75rem;
+  align-items: baseline;
+  justify-content: space-between;
+  flex-wrap: wrap;
+}
+
+.editor-preview-note {
+  font-size: 0.8rem;
+}
+
+/* The frame is the delivery frame: everything inside it is positioned as a
+   fraction of this box, which is what lets the preview scale honestly. */
+.editor-frame {
+  position: relative;
+  width: 100%;
+  max-height: 68vh;
+  margin-inline: auto;
+  overflow: hidden;
+  border-radius: var(--radius);
+  background: #05070a;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  /* The title card sizes its type in `cqw`, because it has to grow with the frame
+     and not with the viewport — the frame is a column in a grid. */
+  container-type: inline-size;
+}
+
+.editor-frame-backdrop {
+  position: absolute;
+  inset: -6%;
+  width: 112%;
+  height: 112%;
+  object-fit: cover;
+  filter: blur(28px) saturate(1.15) brightness(0.62);
+  /* Purely decorative fill for the letterbox margins. */
+  pointer-events: none;
+}
+
+.editor-frame-image {
+  position: relative;
+  width: 100%;
+  height: 100%;
+}
+
+.editor-frame-image.crop {
+  object-fit: cover;
+}
+
+.editor-frame-image.blur {
+  object-fit: contain;
+}
+
+.editor-frame-empty {
+  position: relative;
+  color: color-mix(in srgb, var(--mist) 70%, transparent);
+}
+
+.editor-card {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  padding: 8%;
+  text-align: center;
+  background: #0a0d0c;
+}
+
+.editor-card-heading {
+  font-family: var(--display);
+  font-size: clamp(1.2rem, 4.2cqw, 2.4rem);
+  color: #f7f9f8;
+  margin: 0;
+  line-height: 1.15;
+}
+
+.editor-card-sub {
+  font-size: clamp(0.75rem, 2.1cqw, 1.05rem);
+  color: #b9c4c0;
+  margin: 0;
+}
+
+.editor-caption-layer {
+  position: absolute;
+  left: 0;
+  right: 0;
+  display: flex;
+  justify-content: center;
+  padding-inline: 5%;
+  pointer-events: none;
+}
+
+.editor-caption {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  text-wrap: balance;
+}
+
+.editor-caption-line {
+  display: block;
+}
+
+.editor-watermark {
+  position: absolute;
+  font-family: var(--sans);
+  font-weight: 600;
+  color: #ffffff;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.55);
+  pointer-events: none;
+}
+
+.editor-watermark.top_left {
+  top: 3.2%;
+  left: 3.2%;
+}
+
+.editor-watermark.top_right {
+  top: 3.2%;
+  right: 3.2%;
+}
+
+.editor-watermark.bottom_left {
+  bottom: 3.2%;
+  left: 3.2%;
+}
+
+.editor-watermark.bottom_right {
+  bottom: 3.2%;
+  right: 3.2%;
+}
+
+/* Off-screen but decoded, so the next image does not flash in. */
+.editor-preload {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.editor-transport {
+  display: flex;
+  gap: 0.75rem;
+  align-items: center;
+}
+
+.editor-transport input[type='range'] {
+  flex: 1;
+  min-width: 0;
+}
+
+.editor-time {
+  font-variant-numeric: tabular-nums;
+  font-size: 0.82rem;
+  color: var(--ink-soft);
+  white-space: nowrap;
+}
+
+/* Timeline -------------------------------------------------------------- */
+
+.editor-trim {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+
+.editor-trim-head {
+  display: flex;
+  gap: 0.75rem;
+  align-items: baseline;
+  justify-content: space-between;
+  flex-wrap: wrap;
+}
+
+.editor-trim-head .muted {
+  margin: 0;
+  font-size: 0.82rem;
+}
+
+.editor-trim-track {
+  display: flex;
+  gap: 2px;
+  height: 2.1rem;
+  border-radius: 6px;
+  overflow: hidden;
+  background: var(--mist);
+}
+
+/* One block per line, sized by duration, so the strip reads as the shape of the
+   episode rather than a uniform row of buttons. */
+.editor-trim-block {
+  flex-basis: 0;
+  min-width: 2px;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  background: color-mix(in srgb, var(--teal) 42%, var(--mist));
+  transition: background 0.15s var(--ease);
+}
+
+.editor-trim-block:hover {
+  background: color-mix(in srgb, var(--teal) 62%, var(--mist));
+}
+
+.editor-trim-block.excluded {
+  background: color-mix(in srgb, var(--line) 55%, var(--paper));
+}
+
+.editor-trim-block.current {
+  background: var(--amber);
+}
+
+.editor-trim-actions,
+.editor-clips {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.editor-clips-label {
+  font-size: 0.8rem;
+  margin: 0;
+}
+
+/* Controls -------------------------------------------------------------- */
+
+.editor-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.editor-label {
+  display: flex;
+  gap: 0.5rem;
+  align-items: baseline;
+  justify-content: space-between;
+  font-size: 0.84rem;
+  color: var(--ink-soft);
+}
+
+.editor-value {
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+  color: var(--ink);
+  white-space: nowrap;
+}
+
+.editor-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.75rem;
+}
+
+.editor-toggle {
+  display: flex;
+  gap: 0.55rem;
+  align-items: center;
+  font-size: 0.88rem;
+  cursor: pointer;
+}
+
+.editor-toggle.disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.editor-toggle input {
+  width: 1rem;
+  height: 1rem;
+  accent-color: var(--teal);
+}
+
+.editor-chips,
+.editor-tracks {
+  display: flex;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+}
+
+.editor-chip {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.1rem;
+  font: inherit;
+  font-size: 0.82rem;
+  padding: 0.35rem 0.65rem;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--ink-soft);
+  cursor: pointer;
+  max-width: 16rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  transition:
+    border-color 0.15s var(--ease),
+    background 0.15s var(--ease),
+    color 0.15s var(--ease);
+}
+
+.editor-chip:hover {
+  border-color: color-mix(in srgb, var(--teal) 45%, var(--line));
+  color: var(--ink);
+}
+
+.editor-chip.active {
+  border-color: var(--teal);
+  background: color-mix(in srgb, var(--teal) 10%, transparent);
+  color: var(--teal-deep);
+  font-weight: 600;
+}
+
+.editor-chip-note {
+  font-size: 0.68rem;
+  font-weight: 400;
+  letter-spacing: 0.02em;
+  opacity: 0.7;
+}
+
+.editor-colour input[type='color'] {
+  width: 100%;
+  height: 2.1rem;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: transparent;
+  cursor: pointer;
+}
+
+/* Export and share ------------------------------------------------------ */
+
+.editor-status {
+  margin: 0;
+  font-size: 0.86rem;
+}
+
+.editor-export-actions {
+  display: flex;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+}
+
+.editor-share {
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+  padding-top: 0.85rem;
+  border-top: 1px solid var(--line);
+}
+
+.editor-share-link {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.editor-share-link input {
+  flex: 1;
+  min-width: 0;
+  font-size: 0.82rem;
+  font-family: var(--sans);
+  padding: 0.45rem 0.6rem;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--paper);
+  color: var(--ink-soft);
+}
+
+.editor-share-meta {
+  margin: 0;
+  font-size: 0.8rem;
+}
+
+.editor-share .btn.text {
+  align-self: flex-start;
+}
+
+/* Shared cut ------------------------------------------------------------ */
+
+.share-view {
+  max-width: 54rem;
+  margin: 0 auto;
+  padding: 3rem 1.5rem 4rem;
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+  align-items: center;
+  text-align: center;
+}
+
+.share-card {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 0.9rem;
+  align-items: center;
+  padding: 1.5rem;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--panel);
+  box-shadow: var(--shadow);
+}
+
+.share-card h1 {
+  font-family: var(--display);
+  font-size: clamp(1.5rem, 4vw, 2.2rem);
+  margin: 0;
+}
+
+.share-video {
+  width: 100%;
+  max-height: 70vh;
+  border-radius: var(--radius);
+  background: #05070a;
+}
+
+.share-actions {
+  display: flex;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+  justify-content: center;
+}
+
+.share-expiry {
+  margin: 0;
+  font-size: 0.8rem;
+}
+
 /* Responsive ----------------------------------------------------------- */
 
 @media (max-width: 900px) {
@@ -1711,6 +2261,10 @@
   .studio-head {
     flex-direction: column;
   }
+
+  .editor-body {
+    grid-template-columns: 1fr;
+  }
 }
 
 @media (max-width: 560px) {
@@ -1724,6 +2278,15 @@
 
   .compose-actions {
     flex-direction: column-reverse;
+    align-items: stretch;
+  }
+
+  .editor-row {
+    grid-template-columns: 1fr;
+  }
+
+  .editor-invite {
+    flex-direction: column;
     align-items: stretch;
   }
 }

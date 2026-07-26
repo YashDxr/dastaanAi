@@ -82,6 +82,15 @@ def carry_over_assets(
     the child keep a row for the old mix would hand the browser the same asset id
     for different audio - a cached stale episode that no reload would clear.
 
+    Edited cuts are not carried over either, for a stronger reason: a cut is a
+    render of one particular version's footage, and its `video_edits` row still
+    points at that version. Copying the MP4 forward would put a second row for the
+    same render on a version whose script may no longer match it.
+
+    Uploaded backing tracks *are* carried over. Nothing in the pipeline produced
+    them, so no regeneration can invalidate them, and a listener who uploaded a
+    song should not have to upload it again because they respoke one line.
+
     Copies point at the parent's `object_key`. Stored objects are immutable and are
     never deleted per-version, so sharing bytes across versions is safe and avoids
     duplicating an entire episode's worth of audio on every respeak.
@@ -92,9 +101,15 @@ def carry_over_assets(
         select(MediaAsset).where(MediaAsset.version_id == parent_version_id)
     ).all()
 
+    not_inherited = {
+        AssetKind.FINAL_EPISODE.value,
+        AssetKind.FINAL_VIDEO.value,
+        AssetKind.EDITED_VIDEO.value,
+    }
+
     copied = 0
     for asset in parent_assets:
-        if asset.kind in (AssetKind.FINAL_EPISODE.value, AssetKind.FINAL_VIDEO.value) or asset.dedupe_key in stale:
+        if asset.kind in not_inherited or asset.dedupe_key in stale:
             continue
         session.add(
             MediaAsset(

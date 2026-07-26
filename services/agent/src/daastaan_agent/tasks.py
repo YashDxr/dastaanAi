@@ -28,7 +28,14 @@ from daastaan_common import (
     ids,
     session_scope,
 )
-from daastaan_common.models import Feedback, IngestJob, MediaAsset, Story, StoryVersion
+from daastaan_common.models import (
+    Feedback,
+    IngestJob,
+    MediaAsset,
+    Story,
+    StoryVersion,
+    VideoEdit,
+)
 from daastaan_contracts import (
     AssetEvent,
     AssetKind,
@@ -39,15 +46,20 @@ from daastaan_contracts import (
     JobStatus,
     MusicStatusEvent,
     Queue,
+    RenderStatus,
     Scope,
     StageName,
     StageProgressEvent,
     StoryState,
     StoryStatus,
     TaskName,
+    VideoEditManifest,
+    build_timeline,
     language_name,
     limits,
+    manifest_digest,
     plan_stages,
+    timeline_duration_ms,
 )
 from sqlmodel import Session, select
 
@@ -86,6 +98,7 @@ from .tracing import (
     set_pipeline_context,
     start_mlflow_run,
 )
+from .video_edit import AudioSources, Segment, VideoEditError, plan_segments, render_edit
 
 log = structlog.get_logger(__name__)
 
@@ -1362,6 +1375,207 @@ def export_bgm(self, version_id: str, user_id: str, fmt: str) -> str:  # type: i
 
     log.info("bgm_export_ready", version_id=version_id, fmt=fmt, bytes=len(data))
     return asset_id
+
+
+# --- video editor ----------------------------------------------------------
+
+
+@celery_app.task(name=TaskName.RENDER_VIDEO_EDIT.value, bind=True, **RETRY_KWARGS)
+def render_video_edit(self, edit_id: str, user_id: str) -> str:  # type: ignore[no-untyped-def]
+    """Render one edited cut described by a `video_edits` manifest.
+
+    Rebuilt from the pipeline's source assets rather than re-cut from
+    `final_video` - see `daastaan_agent.video_edit` for why. Runs on the assembly
+    pool, which is where ffmpeg lives and where concurrency is 1, so a long encode
+    cannot starve the media workers.
+
+    Rendering never touches `StoryState` or the story's status. A cut is
+    downstream of a finished episode, and a failed export must not make a story
+    that plays perfectly well look broken.
+    """
+    init_tracing()
+
+    with session_scope() as session:
+        edit = session.get(VideoEdit, edit_id)
+        if edit is None:
+            raise LookupError(f"video edit {edit_id} not found")
+
+        manifest = VideoEditManifest.model_validate(edit.manifest_json)
+        digest = manifest_digest(manifest)
+        # A redelivery of a render that already landed must not encode again.
+        if edit.status == RenderStatus.READY and edit.rendered_manifest_hash == digest:
+            log.info("edit_render_cached", edit_id=edit_id)
+            return edit.render_asset_id or edit_id
+
+        edit.status = RenderStatus.RENDERING
+        edit.error = None
+        edit.render_started_at = datetime.now(UTC)
+        session.add(edit)
+        session.commit()
+        version_id, story_id = edit.version_id, edit.story_id
+
+    try:
+        with session_scope() as session:
+            state = repo.load_state(session, version_id)
+            sources, segments, trim = _gather_edit_inputs(session, state, manifest)
+
+        video = render_edit(
+            manifest,
+            segments,
+            sources,
+            trim_start_ms=trim[0],
+            trim_end_ms=trim[1],
+        )
+
+        # Keyed by manifest digest, so re-rendering an unchanged cut is a lookup
+        # and a changed one lands on a new asset id. That second part matters:
+        # `/api/media` marks bytes immutable, so reusing the id for new content
+        # would leave the old cut in every browser cache that had seen it.
+        dedupe = f"{AssetKind.EDITED_VIDEO.value}:{edit_id}:{digest}"
+        key = ids.object_key(version_id, AssetKind.EDITED_VIDEO, tag=digest, ext="mp4")
+        get_store().put(key, video, "video/mp4")
+
+        with session_scope() as session:
+            asset = repo.record_asset(
+                session,
+                version_id=version_id,
+                kind=AssetKind.EDITED_VIDEO,
+                dedupe_key=dedupe,
+                object_key=key,
+                content_type="video/mp4",
+                size_bytes=len(video),
+                duration_ms=sum(segment.duration_ms for segment in segments),
+            )
+            edit = session.get(VideoEdit, edit_id)
+            if edit is not None:
+                edit.status = RenderStatus.READY
+                edit.render_asset_id = asset.id
+                edit.rendered_manifest_hash = digest
+                edit.error = None
+                edit.render_finished_at = datetime.now(UTC)
+                edit.updated_at = datetime.now(UTC)
+                session.add(edit)
+            session.commit()
+            asset_id = asset.id
+
+        log.info("edit_render_ready", edit_id=edit_id, story_id=story_id, bytes=len(video))
+        return asset_id
+    except Exception as exc:
+        # Recorded on the row rather than only raised: the editor polls this, and
+        # Celery's own result backend expires long before someone comes back to
+        # find out why their export never appeared.
+        with session_scope() as session:
+            edit = session.get(VideoEdit, edit_id)
+            if edit is not None:
+                edit.status = RenderStatus.FAILED
+                edit.error = str(exc)[:2000]
+                edit.render_finished_at = datetime.now(UTC)
+                edit.updated_at = datetime.now(UTC)
+                session.add(edit)
+                session.commit()
+        log.error("edit_render_failed", edit_id=edit_id, exc_info=True)
+        raise
+
+
+def _gather_edit_inputs(
+    session: Session, state: StoryState, manifest: VideoEditManifest
+) -> tuple[AudioSources, list[Segment], tuple[int, int]]:
+    """Collect the artwork, audio and timeline one cut needs.
+
+    The narration is rebuilt from the per-line clips rather than taken from the
+    finished mix, which is what keeps the score a separate layer the manifest can
+    drop. It also means both the clips and the artwork are hard requirements: an
+    episode missing either cannot be cut, and the editor refuses to open against
+    one rather than presenting controls that would fail here.
+    """
+    version_id = state.version_id
+    store = get_store()
+
+    audio_assets = {
+        asset.line_id: asset
+        for asset in session.exec(
+            select(MediaAsset).where(
+                MediaAsset.version_id == version_id,
+                MediaAsset.kind == AssetKind.LINE_AUDIO.value,
+                MediaAsset.object_key != "",
+            )
+        ).all()
+        if asset.line_id
+    }
+
+    durations = {
+        line_id: asset.duration_ms or 0 for line_id, asset in audio_assets.items()
+    }
+    spans = build_timeline(state.lines, durations)
+    if not spans:
+        raise VideoEditError("this episode has no synthesised lines to cut")
+
+    images: dict[str, bytes] = {}
+    for asset in session.exec(
+        select(MediaAsset).where(
+            MediaAsset.version_id == version_id,
+            MediaAsset.kind == AssetKind.SCENE_IMAGE.value,
+            MediaAsset.object_key != "",
+        )
+    ).all():
+        slot = asset.line_id or asset.scene_id
+        if slot:
+            images[slot] = store.get(asset.object_key)
+    if not images:
+        raise VideoEditError("this episode has no scene artwork to cut")
+
+    segments = plan_segments(spans, images, manifest)
+
+    clips = [
+        Clip(
+            audio=store.get(audio_assets[span.line_id].object_key),
+            pause_after_ms=span.pause_ms,
+        )
+        for span in spans
+    ]
+    narration = compose_episode(clips)
+
+    score: bytes | None = None
+    if manifest.audio.keep_score:
+        score_asset = session.exec(
+            select(MediaAsset).where(
+                MediaAsset.version_id == version_id,
+                MediaAsset.kind == AssetKind.MUSIC_BED.value,
+                MediaAsset.object_key != "",
+            )
+        ).first()
+        if score_asset is not None:
+            try:
+                score = store.get(score_asset.object_key)
+            except Exception:
+                # The same rule assembly follows: a missing optional cue degrades
+                # the cut, it does not fail it.
+                log.warning("edit_score_missing", version_id=version_id, exc_info=True)
+
+    local: bytes | None = None
+    if manifest.audio.local_asset_id:
+        local_asset = session.get(MediaAsset, manifest.audio.local_asset_id)
+        if (
+            local_asset is None
+            or local_asset.version_id != version_id
+            or local_asset.kind != AssetKind.LOCAL_AUDIO.value
+            or not local_asset.object_key
+        ):
+            # Checked here as well as at the API boundary, because a manifest can
+            # be rendered long after it was saved and the asset it names is the
+            # one thing in it that another request could have removed.
+            raise VideoEditError("the backing track named by this cut is unavailable")
+        local = store.get(local_asset.object_key)
+
+    trim_end = (
+        manifest.trim.end_ms
+        if manifest.trim.end_ms is not None
+        else timeline_duration_ms(spans)
+    )
+    return AudioSources(narration=narration, score=score, local=local), segments, (
+        manifest.trim.start_ms,
+        trim_end,
+    )
 
 
 # --- document ingest -------------------------------------------------------

@@ -8,7 +8,7 @@ contract and neither React app hand-writes an interface.
 from datetime import datetime
 from typing import Any, Literal
 
-from daastaan_contracts import Scope, StageName, limits
+from daastaan_contracts import Scope, StageName, VideoEditManifest, limits
 from pydantic import BaseModel, EmailStr, Field
 
 # --- auth ------------------------------------------------------------------
@@ -195,6 +195,159 @@ class DispatchAccepted(BaseModel):
     task_id: str
 
 
+# --- video editor -----------------------------------------------------------
+
+
+class CaptionCueOut(BaseModel):
+    """One caption, timed against the untrimmed episode.
+
+    The editor needs these to draw its own preview overlay, so the browser is
+    working from the same timeline the renderer will use rather than guessing at
+    line boundaries from durations it would have to add up itself.
+    """
+
+    line_id: str
+    scene_id: str
+    index: int
+    start_ms: int
+    # Where the picture changes, which is the spoken part plus its trailing pause.
+    end_ms: int
+    # Where the caption clears, which is the spoken part only.
+    caption_end_ms: int
+    speaker: str
+    text: str
+    image_url: str | None
+
+
+class VideoEditOut(BaseModel):
+    id: str
+    story_id: str
+    version_id: str
+    name: str
+    manifest: VideoEditManifest
+    status: str
+    error: str | None
+    # The rendered MP4, when there is one. Present even while the cut is a draft
+    # again, so the previous export stays downloadable while a new one is made.
+    video_url: str | None
+    download_url: str | None
+    size_bytes: int | None
+    duration_ms: int | None
+    # False once the manifest has been edited past what was rendered.
+    render_current: bool
+    # False when the story has been regenerated since this cut was made. The cut
+    # still renders - its footage is still there - but its trim points at a
+    # timeline the current episode no longer has, so the editor archives it rather
+    # than reopening it over the wrong script.
+    version_current: bool
+    share_url: str | None
+    share_expires_at: datetime | None
+    share_views: int
+    created_at: datetime
+    updated_at: datetime
+
+
+class VideoEditCreateRequest(BaseModel):
+    name: str = Field(default="", max_length=80)
+    # Omitted means "start from the defaults", which is what the New cut button
+    # sends. A preset name is applied by the client, not here.
+    manifest: VideoEditManifest | None = None
+
+
+class VideoEditUpdateRequest(BaseModel):
+    name: str | None = Field(default=None, max_length=80)
+    manifest: VideoEditManifest | None = None
+
+
+class CaptionPresetOut(BaseModel):
+    key: str
+    label: str
+    detail: str
+    style: dict[str, Any]
+
+
+class FontOptionOut(BaseModel):
+    key: str
+    label: str
+    detail: str
+
+
+class AspectOptionOut(BaseModel):
+    key: str
+    label: str
+    detail: str
+    width: int
+    height: int
+
+
+class EditorCapabilitiesOut(BaseModel):
+    """What this particular episode lets the editor do.
+
+    A cut is rebuilt from source assets, so the controls that are meaningful
+    depend on which of those still exist. Reporting it here keeps the UI from
+    offering a switch that the renderer would then ignore.
+    """
+
+    has_score: bool
+    has_artwork: bool
+    line_count: int
+    duration_ms: int
+
+
+class VideoEditorOut(BaseModel):
+    """Everything the editor needs to open, in one request."""
+
+    story_id: str
+    version_id: str
+    title: str | None
+    capabilities: EditorCapabilitiesOut
+    cues: list[CaptionCueOut]
+    # The pipeline's own video, if it made one. Shown as "before" next to a cut.
+    source_video_url: str | None
+    episode_audio_url: str | None
+    edits: list[VideoEditOut]
+    local_audio: list["LocalAudioOut"]
+    caption_presets: list[CaptionPresetOut]
+    fonts: list[FontOptionOut]
+    aspects: list[AspectOptionOut]
+
+
+class LocalAudioOut(BaseModel):
+    id: str
+    filename: str
+    content_type: str
+    duration_ms: int | None
+    size_bytes: int | None
+    url: str
+
+
+class ShareRequest(BaseModel):
+    # Zero means no expiry. Capped so a link cannot be minted to outlive the
+    # account that made it by years.
+    expires_in_hours: int = Field(default=168, ge=0, le=24 * 90)
+
+
+class ShareOut(BaseModel):
+    share_url: str
+    expires_at: datetime | None
+
+
+class SharedCutOut(BaseModel):
+    """The public view of a shared cut.
+
+    Deliberately thin: a title, the video, and how long it runs. No ids, no
+    owner, no story text - a share link is a link to one clip, not a window onto
+    the account that made it.
+    """
+
+    title: str | None
+    name: str
+    duration_ms: int | None
+    aspect: str
+    video_url: str
+    expires_at: datetime | None
+
+
 # --- admin -----------------------------------------------------------------
 
 
@@ -359,3 +512,4 @@ class UserCostDetailOut(BaseModel):
 
 
 StoryDetailOut.model_rebuild()
+VideoEditorOut.model_rebuild()

@@ -29,6 +29,21 @@ def _now() -> datetime:
     return datetime.now(UTC)
 
 
+def as_utc(value: datetime) -> datetime:
+    """A stored timestamp, made safe to compare against `datetime.now(UTC)`.
+
+    These columns are plain `datetime`, which SQLAlchemy maps to `TIMESTAMP
+    WITHOUT TIME ZONE`, so a value written as aware comes back naive - and
+    comparing a naive datetime to an aware one raises `TypeError` rather than
+    returning a wrong answer. Everything here is written in UTC by `_now`, so
+    attaching UTC on the way out is the reading that matches what was stored.
+
+    Most code sidesteps this by comparing inside SQL. Anything that has to compare
+    in Python should go through here.
+    """
+    return value if value.tzinfo is not None else value.replace(tzinfo=UTC)
+
+
 def _json_column(nullable: bool = False) -> Column:
     """A JSONB column that notices in-place edits.
 
@@ -236,6 +251,49 @@ class IngestJob(SQLModel, table=True):
     error: str | None = None
     created_at: datetime = Field(default_factory=_now, index=True)
     finished_at: datetime | None = None
+
+
+class VideoEdit(SQLModel, table=True):
+    """One cut of a finished episode, made in the video editor.
+
+    A row is the *manifest*, not the MP4: the rendered file is an ordinary
+    `media_assets` row this points at. Keeping them apart is what lets the
+    manifest be edited freely - a saved change puts the cut back to `draft` and
+    the previous render stays downloadable until a new one replaces it.
+
+    Cuts live outside `StoryVersion.state_json` on purpose. They are not pipeline
+    output, a regeneration must not carry them forward, and the share token needs
+    a unique index that a JSON blob cannot give it.
+    """
+
+    __tablename__ = "video_edits"
+
+    id: str = Field(default_factory=_uuid, primary_key=True)
+    story_id: str = Field(foreign_key="stories.id", index=True)
+    # The version the cut was made from. A cut is only valid against the assets
+    # it was built on, so a regeneration leaves it pointing at the old version
+    # rather than silently re-cutting different footage.
+    version_id: str = Field(index=True)
+    user_id: str = Field(foreign_key="users.id", index=True)
+    name: str = "Cut 1"
+    manifest_json: dict[str, Any] = Field(default_factory=dict, sa_column=_json_column())
+    status: str = Field(default="draft", index=True)
+    error: str | None = None
+    render_asset_id: str | None = Field(default=None, index=True)
+    # Digest of the manifest the current render was made from. Comparing it to
+    # the stored manifest is how the editor tells a current cut from a stale one
+    # without diffing two JSON blobs in the browser.
+    rendered_manifest_hash: str | None = None
+    render_started_at: datetime | None = None
+    render_finished_at: datetime | None = None
+    # Unminted until someone shares the cut. Nullable *and* unique, which
+    # Postgres allows because it treats NULLs as distinct.
+    share_token: str | None = Field(default=None, unique=True, index=True)
+    share_created_at: datetime | None = None
+    share_expires_at: datetime | None = None
+    share_views: int = 0
+    created_at: datetime = Field(default_factory=_now, index=True)
+    updated_at: datetime = Field(default_factory=_now)
 
 
 class RateLimitEvent(SQLModel, table=True):

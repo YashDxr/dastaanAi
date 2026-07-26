@@ -6,10 +6,16 @@ import type {
   ExportFormat,
   FeedbackEntry,
   Ingest,
+  LocalAudio,
   Progress,
+  SharedCut,
+  ShareInfo,
   Story,
   StoryDetail,
   User,
+  VideoEdit,
+  VideoEditManifest,
+  VideoEditorBootstrap,
 } from './types'
 
 export { ApiError }
@@ -77,6 +83,44 @@ export const stories = {
       method: 'POST',
       body: JSON.stringify(body),
     }),
+}
+
+export const editor = {
+  /** Everything the editor needs to open: timeline, artwork, cuts, choices. */
+  open: (storyId: string) => apiFetch<VideoEditorBootstrap>(`/stories/${storyId}/editor`),
+  createCut: (storyId: string, body: { name?: string; manifest?: VideoEditManifest }) =>
+    apiFetch<VideoEdit>(`/stories/${storyId}/editor/cuts`, {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
+  cut: (editId: string) => apiFetch<VideoEdit>(`/editor/cuts/${editId}`),
+  updateCut: (editId: string, body: { name?: string; manifest?: VideoEditManifest }) =>
+    apiFetch<VideoEdit>(`/editor/cuts/${editId}`, {
+      method: 'PATCH',
+      body: JSON.stringify(body),
+    }),
+  deleteCut: (editId: string) =>
+    apiFetch<void>(`/editor/cuts/${editId}`, { method: 'DELETE' }),
+  render: (editId: string) =>
+    apiFetch<VideoEdit>(`/editor/cuts/${editId}/render`, { method: 'POST' }),
+  share: (editId: string, expiresInHours: number) =>
+    apiFetch<ShareInfo>(`/editor/cuts/${editId}/share`, {
+      method: 'POST',
+      body: JSON.stringify({ expires_in_hours: expiresInHours }),
+    }),
+  revokeShare: (editId: string) =>
+    apiFetch<void>(`/editor/cuts/${editId}/share`, { method: 'DELETE' }),
+  uploadAudio: (storyId: string, file: File) => {
+    const body = new FormData()
+    body.append('file', file)
+    return apiFetch<LocalAudio>(`/stories/${storyId}/editor/audio`, { method: 'POST', body })
+  },
+}
+
+/** The public share route. Unauthenticated on purpose — the token is the whole
+ *  credential, so nothing here sends or needs a session. */
+export const share = {
+  get: (token: string) => apiFetch<SharedCut>(`/share/${encodeURIComponent(token)}`),
 }
 
 export const ingest = {

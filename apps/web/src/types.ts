@@ -202,11 +202,208 @@ export type StoryState = {
   final_video_key?: string | null
 }
 
+/** Panels of the studio. `editor` is the video editor, which is deliberately a
+ *  sibling of the generation view rather than part of it: nothing in it runs the
+ *  pipeline, and it should not be on screen while one is still finishing. */
+export type StudioTab = 'episode' | 'scenes' | 'editor'
+
 export type View =
   | { name: 'landing' }
   | { name: 'library' }
   | { name: 'compose' }
-  | { name: 'studio'; storyId: string }
+  | { name: 'studio'; storyId: string; tab: StudioTab }
+  /** A shared cut. The only view that renders without a session. */
+  | { name: 'share'; token: string }
+
+// --- video editor ----------------------------------------------------------
+
+export type AspectRatio = '16:9' | '9:16' | '1:1' | '4:5'
+export type FrameFill = 'crop' | 'blur'
+export type CaptionFont = 'sans' | 'serif' | 'mono' | 'noto_sans' | 'noto_serif'
+export type CaptionPosition = 'top' | 'middle' | 'bottom'
+export type Corner = 'top_left' | 'top_right' | 'bottom_left' | 'bottom_right'
+export type RenderStatus = 'draft' | 'queued' | 'rendering' | 'ready' | 'failed'
+
+export type CaptionStyle = {
+  enabled: boolean
+  font: CaptionFont
+  size_pt: number
+  primary_color: string
+  outline_color: string
+  outline_px: number
+  shadow_px: number
+  box: boolean
+  box_opacity: number
+  position: CaptionPosition
+  margin_px: number
+  bold: boolean
+  italic: boolean
+  uppercase: boolean
+  max_chars_per_line: number
+  show_speaker: boolean
+}
+
+export type TrimRange = {
+  start_ms: number
+  /** Null means "to the end", which is what a new cut holds. */
+  end_ms: number | null
+}
+
+export type AudioMix = {
+  narration_gain_db: number
+  keep_score: boolean
+  score_gain_db: number
+  local_asset_id: string | null
+  local_gain_db: number
+  /** Positive delays the track; negative starts it partway in. */
+  local_offset_ms: number
+  local_loop: boolean
+  duck_under_narration: boolean
+  fade_in_ms: number
+  fade_out_ms: number
+}
+
+export type TitleCard = {
+  enabled: boolean
+  heading: string
+  subheading: string
+  duration_ms: number
+}
+
+export type Watermark = {
+  enabled: boolean
+  text: string
+  position: Corner
+  opacity: number
+}
+
+export type Motion = {
+  ken_burns: boolean
+  transition_ms: number
+}
+
+export type VideoEditManifest = {
+  aspect: AspectRatio
+  frame_fill: FrameFill
+  trim: TrimRange
+  caption: CaptionStyle
+  caption_overrides: Record<string, string>
+  audio: AudioMix
+  title_card: TitleCard
+  watermark: Watermark
+  motion: Motion
+}
+
+/** One caption, timed against the untrimmed episode. The preview overlay reads
+ *  these so the browser is working from the timeline the renderer will use
+ *  rather than adding durations up itself. */
+export type CaptionCue = {
+  line_id: string
+  scene_id: string
+  index: number
+  start_ms: number
+  /** Where the picture changes: the spoken part plus its trailing pause. */
+  end_ms: number
+  /** Where the caption clears: the spoken part only. */
+  caption_end_ms: number
+  speaker: string
+  text: string
+  image_url: string | null
+}
+
+export type VideoEdit = {
+  id: string
+  story_id: string
+  version_id: string
+  name: string
+  manifest: VideoEditManifest
+  status: RenderStatus
+  error: string | null
+  video_url: string | null
+  download_url: string | null
+  size_bytes: number | null
+  duration_ms: number | null
+  /** False once the manifest has moved on from what was rendered. */
+  render_current: boolean
+  /** False when the story was regenerated after this cut was made. */
+  version_current: boolean
+  share_url: string | null
+  share_expires_at: string | null
+  share_views: number
+  created_at: string
+  updated_at: string
+}
+
+export type EditorCapabilities = {
+  has_score: boolean
+  has_artwork: boolean
+  line_count: number
+  duration_ms: number
+}
+
+export type CaptionPreset = {
+  key: string
+  label: string
+  detail: string
+  style: CaptionStyle
+}
+
+export type EditorOption = {
+  key: string
+  label: string
+  detail: string
+}
+
+export type AspectOption = EditorOption & {
+  width: number
+  height: number
+}
+
+export type LocalAudio = {
+  id: string
+  filename: string
+  content_type: string
+  duration_ms: number | null
+  size_bytes: number | null
+  url: string
+}
+
+export type VideoEditorBootstrap = {
+  story_id: string
+  version_id: string
+  title: string | null
+  capabilities: EditorCapabilities
+  cues: CaptionCue[]
+  source_video_url: string | null
+  episode_audio_url: string | null
+  edits: VideoEdit[]
+  local_audio: LocalAudio[]
+  caption_presets: CaptionPreset[]
+  fonts: EditorOption[]
+  aspects: AspectOption[]
+}
+
+export type ShareInfo = {
+  share_url: string
+  expires_at: string | null
+}
+
+export type SharedCut = {
+  title: string | null
+  name: string
+  duration_ms: number | null
+  aspect: string
+  video_url: string
+  expires_at: string | null
+}
+
+export const RENDER_STATUS_LABELS: Record<RenderStatus, string> = {
+  draft: 'Not exported yet',
+  queued: 'Queued',
+  rendering: 'Rendering',
+  ready: 'Exported',
+  failed: 'Export failed',
+}
 
 export const STAGE_LABELS: Record<string, string> = {
   mood_classification: 'Mood',

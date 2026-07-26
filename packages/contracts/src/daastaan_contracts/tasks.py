@@ -30,6 +30,7 @@ class TaskName(StrEnum):
     INGEST_EXTRACT = "daastaan.ingest.extract"
     EXPORT_AUDIO = "daastaan.export.audio"
     EXPORT_BGM = "daastaan.export.bgm"
+    RENDER_VIDEO_EDIT = "daastaan.video.render_edit"
 
 
 STAGE_QUEUE: dict[StageName, Queue] = {
