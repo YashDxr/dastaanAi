@@ -22,14 +22,20 @@ class TaskName(StrEnum):
     RUN_STAGE = "daastaan.stage.run"
     TTS_LINE = "daastaan.media.tts_line"
     GEN_IMAGE = "daastaan.media.gen_image"
+    GEN_AVATAR = "daastaan.media.gen_avatar"
     GEN_MUSIC = "daastaan.music.generate"
     ASSEMBLE = "daastaan.assembly.compose"
     INTERPRET_FEEDBACK = "daastaan.feedback.interpret"
+    CONSISTENCY_CHECK = "daastaan.story.consistency_check"
     REGENERATE = "daastaan.pipeline.regenerate"
     COMPOSE_VIDEO = "daastaan.video.compose"
     INGEST_EXTRACT = "daastaan.ingest.extract"
     EXPORT_AUDIO = "daastaan.export.audio"
     EXPORT_BGM = "daastaan.export.bgm"
+    RENDER_VIDEO_EDIT = "daastaan.video.render_edit"
+    WRITERS_ROOM = "daastaan.analysis.writers_room"
+    CLIFFHANGER = "daastaan.analysis.cliffhanger"
+    STORY_GENOME = "daastaan.analysis.story_genome"
 
 
 STAGE_QUEUE: dict[StageName, Queue] = {

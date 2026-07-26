@@ -26,6 +26,10 @@ SHOT_TAGS: tuple[str, ...] = ("wide", "mid", "close")
 # Per user, per rolling window.
 RATE_LIMIT_GENERATIONS = 5
 RATE_LIMIT_REGENERATIONS = 20
+# A cheap, on-demand editorial pass, but still a paid model call. This lets a
+# listener rerun it after revisions without turning the button into an
+# unbounded prompt endpoint.
+RATE_LIMIT_CONSISTENCY_CHECKS = 10
 RATE_LIMIT_WINDOW_SECONDS = 3600
 
 # Bounded concurrency for per-line TTS so one story cannot saturate the media pool.
@@ -41,3 +45,29 @@ MUSIC_MAX_PROMPT_CHARS = 1000
 MUSIC_MAX_ASSET_BYTES = 25 * 1024 * 1024
 
 DEFAULT_BUDGET_CAP_USD = 100.0
+
+# --- video editor ----------------------------------------------------------
+#
+# Rendering a cut costs CPU on the assembly pool rather than credit at an API, so
+# these bound queue time rather than spend.
+
+# One cut per line is already more rewriting than a 60-line script needs.
+MAX_CAPTION_OVERRIDES = MAX_LINES
+
+MAX_WATERMARK_CHARS = 40
+
+TITLE_CARD_MIN_MS = 500
+TITLE_CARD_MAX_MS = 8000
+
+# How many saved cuts one story may hold. Each is a stored MP4, so this is the
+# cap that stops an afternoon of tweaking from filling the media volume.
+MAX_EDITS_PER_STORY = 12
+
+# Renders per user, per rolling window. Sits between generations (5) and
+# regenerations (20): an encode is cheap next to a pipeline run but not free.
+RATE_LIMIT_RENDERS = 15
+
+# An uploaded backing track. Generous enough for a full song at a sane bitrate,
+# small enough that the request does not hold a worker slot open.
+MAX_LOCAL_AUDIO_BYTES = 30 * 1024 * 1024
+MAX_LOCAL_AUDIO_SECONDS = 900

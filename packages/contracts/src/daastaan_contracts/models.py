@@ -6,6 +6,8 @@ strict mode requires every property to be required and supports only a narrow
 subset of keywords. Range checks belong in validators, which run after parsing.
 """
 
+from typing import Literal
+
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from .enums import AssetKind, CharacterRole, LineType, VoiceAge, VoiceGender
@@ -133,6 +135,45 @@ class DialogueLine(Strict):
     pause_after_ms: int = 0
 
 
+class ConsistencyFindingOutput(Strict):
+    """One issue found by the on-demand Plot Hole Hunter model.
+
+    The model refers to a scene by its stable *index*, not its database id. The
+    worker maps that index back to a real scene id and drops references it cannot
+    verify before anything reaches a client.
+    """
+
+    severity: Literal["critical", "warning"]
+    type: Literal["knowledge", "timeline", "character", "causality", "continuity"]
+    scene_index: int
+    line_id: str | None
+    explanation: str
+    suggestion: str
+
+
+class ConsistencyAnalysisOutput(Strict):
+    """Strict structured output for the on-demand consistency checker.
+
+    This is deliberately not a pipeline stage. It is a read-only editorial
+    review that can be requested for a completed story without altering the
+    version, its media, or its regeneration plan.
+    """
+
+    summary: str
+    findings: list[ConsistencyFindingOutput]
+
+
+class ConsistencyFinding(Strict):
+    """A checked, user-safe finding persisted by the worker and returned by API."""
+
+    severity: Literal["critical", "warning"]
+    type: Literal["knowledge", "timeline", "character", "causality", "continuity"]
+    scene_id: SceneId
+    line_id: LineId | None
+    explanation: str
+    suggestion: str
+
+
 # --- Stage 5: emotion tagging ----------------------------------------------
 
 
@@ -234,3 +275,103 @@ class ValidatedDirective(Strict):
     target_stage: str
     target_id: str | None
     instruction_delta: str = Field(default="", max_length=500)
+
+
+# --- Writers Room ----------------------------------------------------------
+
+
+class PersonaCritique(Strict):
+    persona: str
+    strengths: list[str]
+    concerns: list[str]
+    suggestions: list[str]
+
+
+class RevisionBrief(Strict):
+    summary: str
+    key_themes: list[str]
+    priority_actions: list[str]
+    overall_score: int  # 1-10
+
+    @field_validator("overall_score")
+    @classmethod
+    def _score_in_range(cls, v: int) -> int:
+        if not 1 <= v <= 10:
+            raise ValueError("overall_score must be between 1 and 10")
+        return v
+
+
+class WritersRoomResult(Strict):
+    critiques: list[PersonaCritique]
+    brief: RevisionBrief
+
+
+# --- Cliffhanger Optimizer ------------------------------------------------
+
+
+class EndingSuggestion(Strict):
+    title: str
+    sketch: str           # 2-3 sentence alternative ending
+    tension_score: int    # 1-10
+    binge_probability: int  # 1-100
+
+    @field_validator("tension_score")
+    @classmethod
+    def _tension_in_range(cls, v: int) -> int:
+        if not 1 <= v <= 10:
+            raise ValueError("tension_score must be between 1 and 10")
+        return v
+
+    @field_validator("binge_probability")
+    @classmethod
+    def _binge_in_range(cls, v: int) -> int:
+        if not 1 <= v <= 100:
+            raise ValueError("binge_probability must be between 1 and 100")
+        return v
+
+
+class CliffhangerResult(Strict):
+    current_score: int        # 1-10
+    current_analysis: str
+    tension: int              # 1-10
+    unresolved_threads: list[str]
+    suggestions: list[EndingSuggestion]
+
+    @field_validator("current_score", "tension")
+    @classmethod
+    def _score_in_range_cliff(cls, v: int) -> int:
+        if not 1 <= v <= 10:
+            raise ValueError("score must be between 1 and 10")
+        return v
+
+
+# --- Story Genome ----------------------------------------------------------
+
+
+class GenomeTrait(Strict):
+    trait: str          # e.g. "slow-burn tension"
+    value: float        # 0.0-1.0
+    explanation: str
+
+    @field_validator("value")
+    @classmethod
+    def _value_in_range(cls, v: float) -> float:
+        if not 0.0 <= v <= 1.0:
+            raise ValueError("value must be between 0.0 and 1.0")
+        return v
+
+
+class StoryConcept(Strict):
+    title: str
+    premise: str
+    why_similar: str
+
+
+class StoryGenomeResult(Strict):
+    traits: list[GenomeTrait]
+    arc_shape: str              # "classic three-act", "in medias res", etc.
+    pacing_profile: str
+    dialogue_ratio: float
+    character_balance: dict[str, float]  # character name -> % of lines
+    concepts: list[StoryConcept]
+    summary: str

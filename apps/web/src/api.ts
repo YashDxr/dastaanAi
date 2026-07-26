@@ -2,14 +2,25 @@ import { ApiError, apiFetch, openProgressStream } from '@daastaan/api-types'
 import type { ProgressEvent } from '@daastaan/api-types'
 import { needsRefresh } from './live'
 import type {
+  CliffhangerAnalysis,
   DispatchAccepted,
+  ConsistencyCheck,
   ExportFormat,
   FeedbackEntry,
   Ingest,
+  LocalAudio,
   Progress,
+  SharedCut,
+  ShareInfo,
   Story,
   StoryDetail,
+  StoryGenomeAnalysis,
   User,
+  Version,
+  VideoEdit,
+  VideoEditManifest,
+  VideoEditorBootstrap,
+  WritersRoomSession,
 } from './types'
 
 export { ApiError }
@@ -40,6 +51,9 @@ export const auth = {
 export const stories = {
   list: () => apiFetch<Story[]>('/stories'),
   get: (id: string) => apiFetch<StoryDetail>(`/stories/${id}`),
+  versions: (id: string) => apiFetch<Version[]>(`/stories/${id}/versions`),
+  version: (id: string, versionId: string) =>
+    apiFetch<StoryDetail>(`/stories/${id}/versions/${versionId}`),
   create: (raw_text: string, genre_hint?: string, output_format?: string, language?: string) =>
     apiFetch<DispatchAccepted>('/stories', {
       method: 'POST',
@@ -52,6 +66,10 @@ export const stories = {
       body: JSON.stringify({ raw_text }),
     }),
   feedbackHistory: (id: string) => apiFetch<FeedbackEntry[]>(`/stories/${id}/feedback`),
+  consistencyChecks: (id: string) =>
+    apiFetch<ConsistencyCheck[]>(`/stories/${id}/consistency-checks`),
+  startConsistencyCheck: (id: string) =>
+    apiFetch<ConsistencyCheck>(`/stories/${id}/consistency-checks`, { method: 'POST' }),
   exports: (id: string) => apiFetch<ExportFormat[]>(`/stories/${id}/exports`),
   requestExport: (id: string, format: string) =>
     apiFetch<{ format: string; ready: boolean; url: string | null; size_bytes: number | null }>(
@@ -71,12 +89,65 @@ export const stories = {
       target_stage: string
       target_id?: string | null
       instruction_delta?: string
+      base_version_id?: string | null
+      expected_current_version_id?: string | null
     },
   ) =>
     apiFetch<DispatchAccepted>(`/stories/${id}/regenerate`, {
       method: 'POST',
       body: JSON.stringify(body),
     }),
+  // --- Post-production analysis features ---
+  writersRoom: (id: string) =>
+    apiFetch<WritersRoomSession[]>(`/stories/${id}/writers-room`),
+  startWritersRoom: (id: string) =>
+    apiFetch<WritersRoomSession>(`/stories/${id}/writers-room`, { method: 'POST' }),
+  cliffhanger: (id: string) =>
+    apiFetch<CliffhangerAnalysis[]>(`/stories/${id}/cliffhanger`),
+  startCliffhanger: (id: string) =>
+    apiFetch<CliffhangerAnalysis>(`/stories/${id}/cliffhanger`, { method: 'POST' }),
+  genome: (id: string) =>
+    apiFetch<StoryGenomeAnalysis[]>(`/stories/${id}/genome`),
+  startGenome: (id: string) =>
+    apiFetch<StoryGenomeAnalysis>(`/stories/${id}/genome`, { method: 'POST' }),
+}
+
+export const editor = {
+  /** Everything the editor needs to open: timeline, artwork, cuts, choices. */
+  open: (storyId: string) => apiFetch<VideoEditorBootstrap>(`/stories/${storyId}/editor`),
+  createCut: (storyId: string, body: { name?: string; manifest?: VideoEditManifest }) =>
+    apiFetch<VideoEdit>(`/stories/${storyId}/editor/cuts`, {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
+  cut: (editId: string) => apiFetch<VideoEdit>(`/editor/cuts/${editId}`),
+  updateCut: (editId: string, body: { name?: string; manifest?: VideoEditManifest }) =>
+    apiFetch<VideoEdit>(`/editor/cuts/${editId}`, {
+      method: 'PATCH',
+      body: JSON.stringify(body),
+    }),
+  deleteCut: (editId: string) =>
+    apiFetch<void>(`/editor/cuts/${editId}`, { method: 'DELETE' }),
+  render: (editId: string) =>
+    apiFetch<VideoEdit>(`/editor/cuts/${editId}/render`, { method: 'POST' }),
+  share: (editId: string, expiresInHours: number) =>
+    apiFetch<ShareInfo>(`/editor/cuts/${editId}/share`, {
+      method: 'POST',
+      body: JSON.stringify({ expires_in_hours: expiresInHours }),
+    }),
+  revokeShare: (editId: string) =>
+    apiFetch<void>(`/editor/cuts/${editId}/share`, { method: 'DELETE' }),
+  uploadAudio: (storyId: string, file: File) => {
+    const body = new FormData()
+    body.append('file', file)
+    return apiFetch<LocalAudio>(`/stories/${storyId}/editor/audio`, { method: 'POST', body })
+  },
+}
+
+/** The public share route. Unauthenticated on purpose — the token is the whole
+ *  credential, so nothing here sends or needs a session. */
+export const share = {
+  get: (token: string) => apiFetch<SharedCut>(`/share/${encodeURIComponent(token)}`),
 }
 
 export const ingest = {

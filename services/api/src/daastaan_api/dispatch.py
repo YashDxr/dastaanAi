@@ -96,6 +96,50 @@ def dispatch_bgm_export(*, version_id: str, user_id: str, fmt: str) -> str:
     return task.id
 
 
+def dispatch_video_edit_render(*, edit_id: str, user_id: str) -> str:
+    task = celery_app.send_task(
+        TaskName.RENDER_VIDEO_EDIT.value,
+        kwargs={"edit_id": edit_id, "user_id": user_id},
+        queue=Queue.ASSEMBLY.value,
+        headers=_task_headers(),
+    )
+    log.info("dispatched_video_edit_render", edit_id=edit_id, task_id=task.id)
+    return task.id
+
+
+def dispatch_writers_room(*, version_id: str, user_id: str, session_id: str) -> str:
+    task = celery_app.send_task(
+        TaskName.WRITERS_ROOM.value,
+        kwargs={"version_id": version_id, "user_id": user_id, "session_id": session_id},
+        queue=Queue.AGENTS.value,
+        headers=_task_headers(),
+    )
+    log.info("dispatched_writers_room", version_id=version_id, task_id=task.id)
+    return task.id
+
+
+def dispatch_cliffhanger(*, version_id: str, user_id: str, session_id: str) -> str:
+    task = celery_app.send_task(
+        TaskName.CLIFFHANGER.value,
+        kwargs={"version_id": version_id, "user_id": user_id, "session_id": session_id},
+        queue=Queue.AGENTS.value,
+        headers=_task_headers(),
+    )
+    log.info("dispatched_cliffhanger", version_id=version_id, task_id=task.id)
+    return task.id
+
+
+def dispatch_story_genome(*, version_id: str, user_id: str, session_id: str) -> str:
+    task = celery_app.send_task(
+        TaskName.STORY_GENOME.value,
+        kwargs={"version_id": version_id, "user_id": user_id, "session_id": session_id},
+        queue=Queue.AGENTS.value,
+        headers=_task_headers(),
+    )
+    log.info("dispatched_story_genome", version_id=version_id, task_id=task.id)
+    return task.id
+
+
 def dispatch_feedback_interpretation(
     *, story_id: str, version_id: str, user_id: str, feedback_id: str
 ) -> str:
@@ -111,4 +155,16 @@ def dispatch_feedback_interpretation(
         headers=_task_headers(),
     )
     log.info("dispatched_feedback", feedback_id=feedback_id, task_id=task.id)
+    return task.id
+
+
+def dispatch_consistency_check(*, check_id: str, user_id: str) -> str:
+    """Queue a read-only editorial review on the lightweight agents worker."""
+    task = celery_app.send_task(
+        TaskName.CONSISTENCY_CHECK.value,
+        kwargs={"check_id": check_id, "user_id": user_id},
+        queue=Queue.AGENTS.value,
+        headers=_task_headers(),
+    )
+    log.info("dispatched_consistency_check", check_id=check_id, task_id=task.id)
     return task.id

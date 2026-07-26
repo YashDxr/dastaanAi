@@ -50,12 +50,45 @@ class FeedbackStatus(StrEnum):
     FAILED = "failed"
 
 
+class ConsistencyCheckStatus(StrEnum):
+    """Lifecycle of a read-only Plot Hole Hunter request."""
+
+    PENDING = "pending"
+    RUNNING = "running"
+    SUCCEEDED = "succeeded"
+    FAILED = "failed"
+
+
 class StoryStatus(StrEnum):
     DRAFT = "draft"
     GENERATING = "generating"
     READY = "ready"
     FAILED = "failed"
     FLAGGED = "flagged"
+
+
+class ReviewStatus(StrEnum):
+    """Editorial state, deliberately separate from the generation lifecycle.
+
+    A story can be technically ``ready`` while an operator still needs changes
+    before it is released. Keeping that decision out of :class:`StoryStatus`
+    makes the review queue reversible without confusing workers about whether a
+    pipeline run succeeded.
+    """
+
+    PENDING = "pending"
+    APPROVED = "approved"
+    FLAGGED = "flagged"
+    CHANGES_REQUESTED = "changes_requested"
+
+
+class ReviewAction(StrEnum):
+    """The small, explicit review transition surface available to admins."""
+
+    APPROVE = "approve"
+    FLAG = "flag"
+    CHANGES_REQUESTED = "changes_requested"
+    CLEAR_FLAG = "clear_flag"
 
 
 class UserRole(StrEnum):
@@ -106,6 +139,15 @@ class AssetKind(StrEnum):
     EPISODE_EXPORT = "episode_export"
     # A transcode of MUSIC_BED for download. Same pattern as EPISODE_EXPORT.
     BGM_EXPORT = "bgm_export"
+    # A re-cut of the episode produced by the video editor. Kept apart from
+    # FINAL_VIDEO so the studio player always resolves the pipeline's own master
+    # and never picks up somebody's 9:16 social crop.
+    EDITED_VIDEO = "edited_video"
+    # An audio track the user uploaded to lay under a cut. Never generated, so it
+    # is not carried over on a regeneration the way produced assets are.
+    LOCAL_AUDIO = "local_audio"
+    # AI-generated character portrait, one per character per version.
+    CHARACTER_AVATAR = "character_avatar"
 
 
 class IngestStatus(StrEnum):

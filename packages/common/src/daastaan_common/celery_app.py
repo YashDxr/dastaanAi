@@ -44,6 +44,9 @@ def create_celery(name: str = "daastaan") -> Celery:
             TaskName.GEN_MUSIC.value: {"queue": Queue.MUSIC.value},
             TaskName.ASSEMBLE.value: {"queue": Queue.ASSEMBLY.value},
             TaskName.INTERPRET_FEEDBACK.value: {"queue": Queue.AGENTS.value},
+            # A read-only lightweight-model review, intentionally not a
+            # pipeline stage or a media task.
+            TaskName.CONSISTENCY_CHECK.value: {"queue": Queue.AGENTS.value},
             TaskName.RUN_PIPELINE.value: {"queue": Queue.AGENTS.value},
             TaskName.REGENERATE.value: {"queue": Queue.AGENTS.value},
             TaskName.INGEST_EXTRACT.value: {"queue": Queue.AGENTS.value},
@@ -51,6 +54,11 @@ def create_celery(name: str = "daastaan") -> Celery:
             # Transcoding belongs wherever ffmpeg already runs.
             TaskName.EXPORT_AUDIO.value: {"queue": Queue.ASSEMBLY.value},
             TaskName.EXPORT_BGM.value: {"queue": Queue.ASSEMBLY.value},
+            TaskName.RENDER_VIDEO_EDIT.value: {"queue": Queue.ASSEMBLY.value},
+            # Post-production analysis features — all run on the agents pool.
+            TaskName.WRITERS_ROOM.value: {"queue": Queue.AGENTS.value},
+            TaskName.CLIFFHANGER.value: {"queue": Queue.AGENTS.value},
+            TaskName.STORY_GENOME.value: {"queue": Queue.AGENTS.value},
         },
     )
     return app

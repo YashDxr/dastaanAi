@@ -10,6 +10,36 @@ const DOWNLOAD_ICON = (
   </svg>
 )
 
+type LineSpan = { lineId: string; startSec: number; endSec: number }
+
+/** Precompute the [start, end) time span for every line in the final mix. */
+function buildTimeline(assets: Asset[], lines: DialogueLine[]): LineSpan[] {
+  const byLine = new Map(
+    assets
+      .filter((a) => a.kind === 'line_audio' && a.line_id)
+      .map((a) => [a.line_id as string, a]),
+  )
+  const sorted = [...lines].sort((a, b) => a.index - b.index)
+  const spans: LineSpan[] = []
+  let cursor = 0
+  for (const line of sorted) {
+    const clip = byLine.get(line.id)
+    const dur = (clip?.duration_ms ?? 0) / 1000
+    spans.push({ lineId: line.id, startSec: cursor, endSec: cursor + dur })
+    cursor += dur + (line.pause_after_ms ?? 0) / 1000
+  }
+  return spans
+}
+
+/** Find which line is playing at the given time. */
+function activeLineAt(timeline: LineSpan[], timeSec: number): string | null {
+  // Linear scan is fine for typical story sizes (< 200 lines)
+  for (let i = timeline.length - 1; i >= 0; i--) {
+    if (timeSec >= timeline[i].startSec) return timeline[i].lineId
+  }
+  return timeline[0]?.lineId ?? null
+}
+
 type Props = {
   assets: Asset[]
   lines?: DialogueLine[]
@@ -17,6 +47,8 @@ type Props = {
   /** After respeak / regen, move the playhead to this line once a mix is available. */
   seekLineId?: string | null
   onSeekHandled?: () => void
+  /** Fires when the currently-playing line changes during playback. */
+  onActiveLineChange?: (lineId: string | null) => void
   /** Story is regenerating — keep showing the previous episode instead of empty. */
   regenerating?: boolean
   /** Enables the download panels. Omitted while a mix does not exist yet. */
@@ -59,6 +91,7 @@ export function AudioPlayer({
   title,
   seekLineId,
   onSeekHandled,
+  onActiveLineChange,
   regenerating = false,
   storyId,
   hasMusicBed = false,
@@ -92,6 +125,15 @@ export function AudioPlayer({
   // A seek asked for before the element has metadata is replayed on load.
   const pendingSeek = useRef<number | null>(null)
   const resumeAfterSeek = useRef(false)
+
+  // Precomputed timeline for active-line tracking. Rebuilt when assets or lines
+  // change (which only happens on poll, not on every frame).
+  const timeline = useMemo(() => buildTimeline(assets, lines), [assets, lines])
+  const timelineRef = useRef(timeline)
+  timelineRef.current = timeline
+  const activeLineRef = useRef<string | null>(null)
+  const onActiveLineChangeRef = useRef(onActiveLineChange)
+  onActiveLineChangeRef.current = onActiveLineChange
 
   // Both arrays are rebuilt on every poll. The seek effect reads them through a
   // ref so it can key off ids alone — depending on the arrays would re-run it on
@@ -199,6 +241,12 @@ export function AudioPlayer({
           const time = audioRef.current?.currentTime ?? 0
           currentRef.current = time
           if (scrubRef.current === null) setCurrent(time)
+          // Active-line tracking: only fire callback when the line changes
+          const nowLine = activeLineAt(timelineRef.current, time)
+          if (nowLine !== activeLineRef.current) {
+            activeLineRef.current = nowLine
+            onActiveLineChangeRef.current?.(nowLine)
+          }
         }}
         onDurationChange={() => {
           const value = audioRef.current?.duration
@@ -212,6 +260,8 @@ export function AudioPlayer({
         onEnded={() => {
           playingRef.current = false
           setPlaying(false)
+          activeLineRef.current = null
+          onActiveLineChangeRef.current?.(null)
         }}
         onPlay={() => {
           playingRef.current = true

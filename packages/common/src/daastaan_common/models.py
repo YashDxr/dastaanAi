@@ -17,7 +17,7 @@ from typing import Any
 
 from sqlalchemy import Column, UniqueConstraint
 from sqlalchemy.dialects.postgresql import JSONB
-from sqlalchemy.ext.mutable import MutableDict
+from sqlalchemy.ext.mutable import MutableDict, MutableList
 from sqlmodel import Field, SQLModel
 
 
@@ -27,6 +27,21 @@ def _uuid() -> str:
 
 def _now() -> datetime:
     return datetime.now(UTC)
+
+
+def as_utc(value: datetime) -> datetime:
+    """A stored timestamp, made safe to compare against `datetime.now(UTC)`.
+
+    These columns are plain `datetime`, which SQLAlchemy maps to `TIMESTAMP
+    WITHOUT TIME ZONE`, so a value written as aware comes back naive - and
+    comparing a naive datetime to an aware one raises `TypeError` rather than
+    returning a wrong answer. Everything here is written in UTC by `_now`, so
+    attaching UTC on the way out is the reading that matches what was stored.
+
+    Most code sidesteps this by comparing inside SQL. Anything that has to compare
+    in Python should go through here.
+    """
+    return value if value.tzinfo is not None else value.replace(tzinfo=UTC)
 
 
 def _json_column(nullable: bool = False) -> Column:
@@ -39,6 +54,11 @@ def _json_column(nullable: bool = False) -> Column:
     onto the parent version and never saw their own directive.
     """
     return Column(MutableDict.as_mutable(JSONB), nullable=nullable)
+
+
+def _json_list_column(nullable: bool = False) -> Column:
+    """JSONB list variant used by durable, structured review results."""
+    return Column(MutableList.as_mutable(JSONB), nullable=nullable)
 
 
 class User(SQLModel, table=True):
@@ -61,6 +81,19 @@ class Story(SQLModel, table=True):
     status: str = Field(default="draft", index=True)
     current_version_id: str | None = Field(default=None, index=True)
     flagged: bool = Field(default=False, index=True)
+    # Review state is intentionally distinct from the generation lifecycle in
+    # ``status``. A completed episode can need editorial changes without being
+    # treated as a failed pipeline run by the listener experience or workers.
+    review_status: str = Field(default="pending", index=True)
+    review_note: str | None = None
+    reviewed_by: str | None = Field(default=None, index=True)
+    reviewed_at: datetime | None = None
+    # A flag is reversible: retain both the prior editorial decision and the
+    # pipeline state so clearing a flag does not accidentally release a story
+    # that was still draft/failed before it was reviewed.
+    review_status_before_flag: str | None = None
+    review_note_before_flag: str | None = None
+    status_before_flag: str | None = None
     created_at: datetime = Field(default_factory=_now)
 
 
@@ -144,6 +177,47 @@ class Feedback(SQLModel, table=True):
     )
     resulting_version_id: str | None = Field(default=None, index=True)
     created_at: datetime = Field(default_factory=_now)
+
+
+class ConsistencyCheck(SQLModel, table=True):
+    """One read-only Plot Hole Hunter request against an immutable story version.
+
+    Results live outside ``StoryVersion.state_json`` so running a quality check
+    never changes the version that was checked. Keeping a short history also
+    makes a retry/audit possible after the listener closes the studio.
+    """
+
+    __tablename__ = "consistency_checks"
+
+    id: str = Field(default_factory=_uuid, primary_key=True)
+    story_id: str = Field(foreign_key="stories.id", index=True)
+    version_id: str = Field(foreign_key="story_versions.id", index=True)
+    user_id: str = Field(foreign_key="users.id", index=True)
+    status: str = Field(default="pending", index=True)
+    task_id: str | None = Field(default=None, index=True)
+    # A worker lease identifier, never exposed to clients. A redelivered task
+    # must atomically claim this before it can make a paid model call, and an
+    # old lease may not overwrite the result of a newer retry.
+    run_token: str | None = Field(default=None, index=True)
+    # ``version_id`` while the check is pending/running, then NULL once it is
+    # terminal.  The unique constraint turns a two-tab API race into one
+    # durable active check without preventing an audit history of completed
+    # reviews (Postgres and SQLite both permit multiple NULL values).
+    active_key: str | None = Field(default=None, index=True)
+    summary: str | None = None
+    findings_json: list[dict[str, Any]] = Field(
+        default_factory=list, sa_column=_json_list_column()
+    )
+    # This is always a short, public-safe status message; worker exceptions are
+    # logged privately and never persisted here verbatim.
+    error: str | None = None
+    created_at: datetime = Field(default_factory=_now, index=True)
+    started_at: datetime | None = None
+    finished_at: datetime | None = None
+
+    __table_args__ = (
+        UniqueConstraint("version_id", "active_key", name="uq_consistency_checks_active_version"),
+    )
 
 
 class CostLedger(SQLModel, table=True):
@@ -235,6 +309,100 @@ class IngestJob(SQLModel, table=True):
     notes: str | None = None
     error: str | None = None
     created_at: datetime = Field(default_factory=_now, index=True)
+    finished_at: datetime | None = None
+
+
+class VideoEdit(SQLModel, table=True):
+    """One cut of a finished episode, made in the video editor.
+
+    A row is the *manifest*, not the MP4: the rendered file is an ordinary
+    `media_assets` row this points at. Keeping them apart is what lets the
+    manifest be edited freely - a saved change puts the cut back to `draft` and
+    the previous render stays downloadable until a new one replaces it.
+
+    Cuts live outside `StoryVersion.state_json` on purpose. They are not pipeline
+    output, a regeneration must not carry them forward, and the share token needs
+    a unique index that a JSON blob cannot give it.
+    """
+
+    __tablename__ = "video_edits"
+
+    id: str = Field(default_factory=_uuid, primary_key=True)
+    story_id: str = Field(foreign_key="stories.id", index=True)
+    # The version the cut was made from. A cut is only valid against the assets
+    # it was built on, so a regeneration leaves it pointing at the old version
+    # rather than silently re-cutting different footage.
+    version_id: str = Field(index=True)
+    user_id: str = Field(foreign_key="users.id", index=True)
+    name: str = "Cut 1"
+    manifest_json: dict[str, Any] = Field(default_factory=dict, sa_column=_json_column())
+    status: str = Field(default="draft", index=True)
+    error: str | None = None
+    render_asset_id: str | None = Field(default=None, index=True)
+    # Digest of the manifest the current render was made from. Comparing it to
+    # the stored manifest is how the editor tells a current cut from a stale one
+    # without diffing two JSON blobs in the browser.
+    rendered_manifest_hash: str | None = None
+    render_started_at: datetime | None = None
+    render_finished_at: datetime | None = None
+    # Unminted until someone shares the cut. Nullable *and* unique, which
+    # Postgres allows because it treats NULLs as distinct.
+    share_token: str | None = Field(default=None, unique=True, index=True)
+    share_created_at: datetime | None = None
+    share_expires_at: datetime | None = None
+    share_views: int = 0
+    created_at: datetime = Field(default_factory=_now, index=True)
+    updated_at: datetime = Field(default_factory=_now)
+
+
+class WritersRoomSession(SQLModel, table=True):
+    """One Writers Room analysis run for a story version."""
+
+    __tablename__ = "writers_room_sessions"
+
+    id: str = Field(default_factory=_uuid, primary_key=True)
+    story_id: str = Field(index=True)
+    version_id: str = Field(index=True)
+    status: str = Field(default="pending", index=True)
+    result_json: dict[str, Any] | None = Field(
+        default=None, sa_column=_json_column(nullable=True)
+    )
+    error: str | None = None
+    created_at: datetime = Field(default_factory=_now)
+    finished_at: datetime | None = None
+
+
+class CliffhangerAnalysis(SQLModel, table=True):
+    """One Cliffhanger Optimizer analysis run for a story version."""
+
+    __tablename__ = "cliffhanger_analyses"
+
+    id: str = Field(default_factory=_uuid, primary_key=True)
+    story_id: str = Field(index=True)
+    version_id: str = Field(index=True)
+    status: str = Field(default="pending", index=True)
+    result_json: dict[str, Any] | None = Field(
+        default=None, sa_column=_json_column(nullable=True)
+    )
+    error: str | None = None
+    created_at: datetime = Field(default_factory=_now)
+    finished_at: datetime | None = None
+
+
+class StoryGenomeAnalysis(SQLModel, table=True):
+    """One Story Genome analysis run for a story version."""
+
+    __tablename__ = "story_genome_analyses"
+
+    id: str = Field(default_factory=_uuid, primary_key=True)
+    story_id: str = Field(index=True)
+    version_id: str = Field(index=True)
+    status: str = Field(default="pending", index=True)
+    result_json: dict[str, Any] | None = Field(
+        default=None, sa_column=_json_column(nullable=True)
+    )
+    error: str | None = None
+    created_at: datetime = Field(default_factory=_now)
     finished_at: datetime | None = None
 
 

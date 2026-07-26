@@ -154,6 +154,7 @@ def assign_voices(
     characters: list[Character],
     *,
     pins: dict[str, str] | None = None,
+    unavailable: set[str] | None = None,
     language: str = "en",
 ) -> dict[str, Voice]:
     """One voice per character, keyed by character id.
@@ -173,7 +174,11 @@ def assign_voices(
     catalogue = SARVAM_VOICE_CATALOGUE if use_sarvam else VOICE_CATALOGUE
     role_affinity = _SARVAM_ROLE_AFFINITY if use_sarvam else _ROLE_AFFINITY
 
-    available = {voice.id: voice for voice in catalogue}
+    available = {
+        voice.id: voice
+        for voice in catalogue
+        if voice.id not in (unavailable or set())
+    }
     assigned: dict[str, Voice] = {}
 
     order = sorted(

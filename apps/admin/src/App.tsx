@@ -2,12 +2,15 @@ import { ApiError, apiFetch } from '@daastaan/api-types'
 import { useCallback, useEffect, useState } from 'react'
 import './App.css'
 import { ChartCard, Donut, EmptyChart, HBar } from './charts'
-import type { AdminSetting, CostRow, CostSummary, User } from './types'
+import type { CostRow, CostSummary, User } from './types'
 import { formatUsd, prettyStage } from './types'
+import { AuditTab } from './views/AuditTab'
 import { RunsTab } from './views/RunsTab'
+import { SettingsTab } from './views/SettingsTab'
+import { StoriesTab } from './views/StoriesTab'
 import { UsersTab } from './views/UsersTab'
 
-type Tab = 'spend' | 'users' | 'runs' | 'settings'
+type Tab = 'spend' | 'users' | 'stories' | 'runs' | 'settings' | 'audit'
 
 function formatError(err: unknown) {
   if (err instanceof ApiError) return typeof err.detail === 'string' ? err.detail : 'Request failed'
@@ -19,7 +22,6 @@ export default function App() {
   const [user, setUser] = useState<User | null>(null)
   const [tab, setTab] = useState<Tab>('spend')
   const [costs, setCosts] = useState<CostSummary | null>(null)
-  const [settings, setSettings] = useState<AdminSetting[]>([])
   const [error, setError] = useState<string | null>(null)
   const [boot, setBoot] = useState(true)
   const [authPending, setAuthPending] = useState(false)
@@ -29,7 +31,6 @@ export default function App() {
     setError(null)
     try {
       if (next === 'spend') setCosts(await apiFetch<CostSummary>('/admin/costs'))
-      if (next === 'settings') setSettings(await apiFetch<AdminSetting[]>('/admin/settings'))
     } catch (err) {
       setError(formatError(err))
     }
@@ -136,8 +137,10 @@ export default function App() {
           [
             ['spend', 'Spend'],
             ['users', 'Users'],
+            ['stories', 'Review queue'],
             ['runs', 'Runs'],
             ['settings', 'Settings'],
+            ['audit', 'Audit'],
           ] as const
         ).map(([id, label]) => (
           <button
@@ -216,29 +219,13 @@ export default function App() {
 
       {tab === 'users' && <UsersTab onError={setError} />}
 
+      {tab === 'stories' && <StoriesTab onError={setError} />}
+
       {tab === 'runs' && <RunsTab onError={setError} />}
 
-      {tab === 'settings' && (
-        <section className="panel">
-          <h2>Runtime settings</h2>
-          <ul className="stack-list">
-            {settings.map((s) => (
-              <li key={s.key}>
-                <strong>{s.key}</strong>
-                <pre className="muted" style={{ whiteSpace: 'pre-wrap', margin: '0.4rem 0 0' }}>
-                  {JSON.stringify(s.value, null, 2)}
-                </pre>
-              </li>
-            ))}
-            {!settings.length && (
-              <li className="muted">
-                No overrides yet. Workers fall back to `.env` model defaults until you add keys like
-                `models` or `budget_cap_usd`.
-              </li>
-            )}
-          </ul>
-        </section>
-      )}
+      {tab === 'settings' && <SettingsTab onError={setError} />}
+
+      {tab === 'audit' && <AuditTab onError={setError} />}
     </main>
   )
 }

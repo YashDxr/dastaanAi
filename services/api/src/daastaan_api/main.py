@@ -20,14 +20,20 @@ from fastapi.responses import JSONResponse
 from .routers import (
     admin,
     auth,
+    cliffhanger,
+    consistency,
     exports,
     feedback,
     health,
     ingest,
     media,
     progress,
+    share,
     stories,
+    story_genome,
     studio,
+    video_editor,
+    writers_room,
 )
 
 log = structlog.get_logger(__name__)
@@ -83,9 +89,24 @@ async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONR
     )
 
 
-for router in (health.router, auth.router, stories.router, feedback.router, media.router,
-               admin.router, studio.router, ingest.router, exports.router,
-               progress.sse_router):
+for router in (
+    health.router,
+    auth.router,
+    stories.router,
+    feedback.router,
+    consistency.router,
+    media.router,
+    admin.router,
+    studio.router,
+    ingest.router,
+    exports.router,
+    video_editor.router,
+    share.router,
+    writers_room.router,
+    cliffhanger.router,
+    story_genome.router,
+    progress.sse_router,
+):
     app.include_router(router, prefix="/api")
 
 # WebSocket paths are not prefixed: the route already carries its own /ws prefix.

@@ -7,8 +7,10 @@ is allowed to throw away.
 """
 
 import pytest
-from daastaan_common.versions import invalidated_dedupe_keys
-from daastaan_contracts import Scope, StageName, StoryState, plan_stages
+from daastaan_common.models import MediaAsset, StoryVersion
+from daastaan_common.versions import carry_over_assets, invalidated_dedupe_keys
+from daastaan_contracts import AssetKind, Scope, StageName, StoryState, plan_stages
+from sqlmodel import select
 
 
 @pytest.fixture
@@ -49,7 +51,7 @@ def state() -> StoryState:
             "lines": [
                 {
                     "id": f"line_{i:04d}",
-                    "scene_id": "scene_00",
+                    "scene_id": "scene_00" if i < 2 else "scene_01",
                     "index": i,
                     "speaker": "Ana" if i % 2 == 0 else "Bo",
                     "character_id": "char_00" if i % 2 == 0 else "char_01",
@@ -94,6 +96,102 @@ class TestSceneScope:
         stale = _invalidated(state, Scope.SCENE, StageName.IMAGE_GENERATION, "scene_01")
         assert "scene_image:scene_01" in stale
         assert "scene_image:scene_00" not in stale
+
+    def test_story_time_machine_drops_all_future_artwork(self, state):
+        """A narrative branch preserves its prefix but invalidates the selected
+        scene and suffix, whose content may now be entirely different."""
+        stale = _invalidated(state, Scope.SCENE, StageName.STORY_UNDERSTANDING, "scene_01")
+        assert "scene_image:scene_01" in stale
+        assert "scene_image:scene_00" not in stale
+        assert stale >= {"line_audio:line_0002", "line_audio:line_0003"}
+        assert "line_audio:line_0000" not in stale
+        assert "line_audio:line_0001" not in stale
+
+
+def test_child_keeps_prefix_media_but_never_terminal_outputs(in_memory_session, state):
+    """Final mixes, videos, and downloaded variants must not make a child look
+    complete before its own assembly. Reusable prefix source media may share the
+    immutable object bytes safely."""
+    parent = StoryVersion(
+        story_id="story_1",
+        version_number=1,
+        state_json=state.model_dump(mode="json"),
+    )
+    child = StoryVersion(story_id="story_1", version_number=2, state_json={})
+    in_memory_session.add(parent)
+    in_memory_session.add(child)
+    in_memory_session.flush()
+    in_memory_session.add_all(
+        [
+            MediaAsset(
+                version_id=parent.id,
+                dedupe_key="line_audio:line_0000",
+                kind=AssetKind.LINE_AUDIO.value,
+                object_key="parent/prefix.mp3",
+                line_id="line_0000",
+            ),
+            MediaAsset(
+                version_id=parent.id,
+                dedupe_key="line_audio:line_0002",
+                kind=AssetKind.LINE_AUDIO.value,
+                object_key="parent/future.mp3",
+                line_id="line_0002",
+            ),
+            MediaAsset(
+                version_id=parent.id,
+                dedupe_key="scene_image:scene_00",
+                kind=AssetKind.SCENE_IMAGE.value,
+                object_key="parent/prefix.png",
+                scene_id="scene_00",
+            ),
+            MediaAsset(
+                version_id=parent.id,
+                dedupe_key="scene_image:scene_01",
+                kind=AssetKind.SCENE_IMAGE.value,
+                object_key="parent/future.png",
+                scene_id="scene_01",
+            ),
+            MediaAsset(
+                version_id=parent.id,
+                dedupe_key="final_episode:single",
+                kind=AssetKind.FINAL_EPISODE.value,
+                object_key="parent/final.mp3",
+            ),
+            MediaAsset(
+                version_id=parent.id,
+                dedupe_key="final_video:single",
+                kind=AssetKind.FINAL_VIDEO.value,
+                object_key="parent/final.mp4",
+            ),
+            MediaAsset(
+                version_id=parent.id,
+                dedupe_key="episode_export:m4a",
+                kind=AssetKind.EPISODE_EXPORT.value,
+                object_key="parent/export.m4a",
+            ),
+        ]
+    )
+    in_memory_session.commit()
+
+    copied = carry_over_assets(
+        in_memory_session,
+        parent_version_id=parent.id,
+        child_version_id=child.id,
+        state=state,
+        scope=Scope.SCENE,
+        planned=plan_stages(Scope.SCENE, StageName.STORY_UNDERSTANDING),
+        target_id="scene_01",
+    )
+    inherited = list(
+        in_memory_session.exec(
+            select(MediaAsset).where(MediaAsset.version_id == child.id)
+        ).all()
+    )
+    assert copied == 2
+    assert {asset.dedupe_key for asset in inherited} == {
+        "line_audio:line_0000",
+        "scene_image:scene_00",
+    }
 
 
 class TestFullStory:

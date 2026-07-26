@@ -1,53 +1,77 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { AppHeader } from '../components/AppHeader'
+import { AlternateEndings } from '../components/AlternateEndings'
 import { AudioPlayer } from '../components/AudioPlayer'
+import { CliffhangerPanel } from '../components/CliffhangerPanel'
 import { VideoPlayer, VideoPlayerEmpty } from '../components/VideoPlayer'
 import { FeedbackComposer } from '../components/FeedbackComposer'
+import { ConsistencyPanel } from '../components/ConsistencyPanel'
 import { ProgressStepper } from '../components/ProgressStepper'
 import { ScenePanel } from '../components/ScenePanel'
 import { ScriptPanel } from '../components/ScriptPanel'
+import { CharacterAvatar } from '../components/CharacterAvatar'
+import { VideoEditor } from '../components/editor/VideoEditor'
+import { StoryTimeMachine } from '../components/StoryTimeMachine'
+import { StoryGenomePanel } from '../components/StoryGenomePanel'
+import { WritersRoomPanel } from '../components/WritersRoomPanel'
 import { formatError, stories as storiesApi, watchProgress } from '../api'
 import { applyEvent, emptyLive } from '../live'
-import type { FeedbackEntry, Progress, StoryDetail, User } from '../types'
+import { studioLink } from '../routing'
+import type { FeedbackEntry, Progress, StoryDetail, StudioTab, User, Version } from '../types'
 
 type Props = {
   user: User
   storyId: string
+  /** Which panel is open. Owned by `App` so it can come from a deep link and be
+   *  written back to the URL, which is what makes the editor linkable. */
+  tab: StudioTab
+  onTab: (tab: StudioTab) => void
   onLogout: () => void
   onHome: () => void
   onCompose: () => void
 }
 
-export function Studio({ user, storyId, onLogout, onHome, onCompose }: Props) {
+export function Studio({ user, storyId, tab, onTab, onLogout, onHome, onCompose }: Props) {
   const [detail, setDetail] = useState<StoryDetail | null>(null)
   const [progress, setProgress] = useState<Progress | null>(null)
   // Live progress, folded from the event stream. Kept beside `progress` rather than
   // merged into it so the polled snapshot stays exactly what the server said.
   const [live, setLive] = useState(emptyLive)
   const [feedback, setFeedback] = useState<FeedbackEntry[]>([])
+  const [versions, setVersions] = useState<Version[]>([])
+  const [baseVersionId, setBaseVersionId] = useState<string | null>(null)
+  const [baseDetail, setBaseDetail] = useState<StoryDetail | null>(null)
+  const [loadingBaseVersion, setLoadingBaseVersion] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
-  const [tab, setTab] = useState<'episode' | 'scenes'>('episode')
   const [seekLineId, setSeekLineId] = useState<string | null>(null)
+  const [activeLineId, setActiveLineId] = useState<string | null>(null)
+  // The editor loads a timeline, artwork and every saved cut, so it is mounted on
+  // first visit rather than with the other panels — and then kept mounted, so
+  // stepping back to the episode does not throw away an in-progress edit.
+  const [editorMounted, setEditorMounted] = useState(tab === 'editor')
   // A respeak is only audible once assembly has rebuilt the mix, so the jump to
   // the line waits for that. These hold the request in the meantime: the line to
   // land on, and the version it was requested from, which is how a rebuilt mix is
   // told apart from the one being replaced.
   const respeakFromVersion = useRef<string | null>(null)
   const pendingRespeakLine = useRef<string | null>(null)
+  const baseVersionRequest = useRef(0)
   // Assets from the last ready version — kept while regenerating so Play stays up.
   const [stickyAssets, setStickyAssets] = useState<StoryDetail['assets']>([])
 
   const refresh = useCallback(async () => {
     try {
-      const [d, p, f] = await Promise.all([
+      const [d, p, f, v] = await Promise.all([
         storiesApi.get(storyId),
         storiesApi.progress(storyId),
         storiesApi.feedbackHistory(storyId),
+        storiesApi.versions(storyId),
       ])
       setDetail(d)
       setProgress(p)
       setFeedback(f)
+      setVersions(v)
       setError(null)
       if (d.assets.some((a) => a.kind === 'final_episode')) {
         setStickyAssets(d.assets)
@@ -88,6 +112,14 @@ export function Studio({ user, storyId, onLogout, onHome, onCompose }: Props) {
   }, [refresh])
 
   useEffect(() => {
+    // On first open, the current revision is the branch source. Once the
+    // listener intentionally picks a historic version we leave that choice in
+    // place while progress refreshes the current child in the background.
+    const currentVersionId = detail?.version?.id
+    if (currentVersionId) setBaseVersionId((selected) => selected ?? currentVersionId)
+  }, [detail?.version?.id])
+
+  useEffect(() => {
     const status = progress?.status ?? detail?.story.status
     if (status !== 'generating') return
     return watchProgress(storyId, {
@@ -105,6 +137,10 @@ export function Studio({ user, storyId, onLogout, onHome, onCompose }: Props) {
   useEffect(() => {
     setLive(emptyLive)
   }, [storyId, detail?.version?.id])
+
+  useEffect(() => {
+    if (tab === 'editor') setEditorMounted(true)
+  }, [tab])
 
   const state = detail?.state
   const regenerating = detail?.story.status === 'generating'
@@ -131,8 +167,50 @@ export function Studio({ user, storyId, onLogout, onHome, onCompose }: Props) {
   const wantsVideo =
     state?.output_format === 'video' || state?.output_format === 'both'
   const scenes = state?.scenes ?? []
+  // Character avatar portraits keyed by character_id (stored in asset.line_id).
+  const avatarUrls = useMemo(() => {
+    const map = new Map<string, string>()
+    for (const a of detail?.assets ?? []) {
+      if (a.kind === 'character_avatar' && a.line_id) map.set(a.line_id, a.url)
+    }
+    return map
+  }, [detail?.assets])
   const hasMusicBed = playerAssets.some((a) => a.kind === 'music_bed')
     || stickyAssets.some((a) => a.kind === 'music_bed')
+  // The editor cuts scene artwork against the recorded lines, so it is only worth
+  // pointing at once both exist and the run has finished producing them.
+  const canEdit =
+    detail?.story.status === 'ready' && images.length > 0 && (state?.lines.length ?? 0) > 0
+  const timelineDetail =
+    baseVersionId && baseVersionId !== detail?.version?.id ? baseDetail : detail
+  const timelineState = timelineDetail?.state
+
+  async function selectBaseVersion(versionId: string) {
+    const request = ++baseVersionRequest.current
+    setBaseVersionId(versionId)
+    if (versionId === detail?.version?.id) {
+      setBaseDetail(null)
+      setLoadingBaseVersion(false)
+      return
+    }
+
+    setLoadingBaseVersion(true)
+    try {
+      const selected = await storiesApi.version(storyId, versionId)
+      if (request === baseVersionRequest.current) {
+        setBaseDetail(selected)
+        setError(null)
+      }
+    } catch (err) {
+      if (request === baseVersionRequest.current) {
+        setBaseVersionId(detail?.version?.id ?? null)
+        setBaseDetail(null)
+        setError(formatError(err))
+      }
+    } finally {
+      if (request === baseVersionRequest.current) setLoadingBaseVersion(false)
+    }
+  }
 
   async function respeakLine(lineId: string) {
     setBusy(true)
@@ -154,6 +232,34 @@ export function Studio({ user, storyId, onLogout, onHome, onCompose }: Props) {
       setError(formatError(err))
       respeakFromVersion.current = null
       pendingRespeakLine.current = null
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function branchFromScene(
+    sceneId: string,
+    instructionDelta: string,
+    sourceVersionId: string,
+  ) {
+    setBusy(true)
+    try {
+      const accepted = await storiesApi.regenerate(storyId, {
+        scope: 'scene',
+        target_stage: 'story_understanding',
+        target_id: sceneId,
+        instruction_delta: instructionDelta,
+        base_version_id: sourceVersionId,
+        expected_current_version_id: detail?.version?.id ?? null,
+      })
+      // The new child becomes current, so show its in-flight timeline rather
+      // than leaving the Time Machine focused on the historic branch source.
+      setBaseVersionId(accepted.version_id)
+      setBaseDetail(null)
+      await refresh()
+    } catch (err) {
+      setError(formatError(err))
+      throw err
     } finally {
       setBusy(false)
     }
@@ -196,6 +302,11 @@ export function Studio({ user, storyId, onLogout, onHome, onCompose }: Props) {
                 [
                   ['episode', 'Episode'],
                   ['scenes', 'Scenes'],
+                  ['revisions', 'Revisions'],
+                  ['editor', 'Editor'],
+                  ['writers-room', 'Writers Room'],
+                  ['cliffhanger', 'Cliffhanger'],
+                  ['genome', 'Story DNA'],
                 ] as const
               ).map(([id, label]) => (
                 <button
@@ -206,12 +317,13 @@ export function Studio({ user, storyId, onLogout, onHome, onCompose }: Props) {
                   aria-selected={tab === id}
                   aria-controls={`studio-panel-${id}`}
                   className={tab === id ? 'active' : ''}
-                  onClick={() => setTab(id)}
+                  onClick={() => onTab(id)}
                 >
                   {label}
                   {id === 'scenes' && scenes.length > 0 && (
                     <span className="tab-count">{scenes.length}</span>
                   )}
+                  {id === 'editor' && canEdit && <span className="tab-count">New</span>}
                 </button>
               ))}
             </nav>
@@ -236,13 +348,17 @@ export function Studio({ user, storyId, onLogout, onHome, onCompose }: Props) {
                   regenerating={regenerating}
                   hasMusicBed={hasMusicBed}
                   onSeekHandled={() => setSeekLineId(null)}
+                  onActiveLineChange={setActiveLineId}
                 />
                 {finalVideo ? (
-                  <VideoPlayer
-                    asset={finalVideo}
-                    title={detail.story.title}
-                    regenerating={regenerating}
-                  />
+                  <>
+                    <VideoPlayer
+                      asset={finalVideo}
+                      title={detail.story.title}
+                      regenerating={regenerating}
+                    />
+                    <EditorInvite storyId={storyId} onOpen={() => onTab('editor')} />
+                  </>
                 ) : wantsVideo ? (
                   <VideoPlayerEmpty regenerating={regenerating} />
                 ) : null}
@@ -257,7 +373,10 @@ export function Studio({ user, storyId, onLogout, onHome, onCompose }: Props) {
                   characters={state?.characters ?? []}
                   scenes={state?.scenes ?? []}
                   busy={busy || regenerating}
+                  activeLineId={activeLineId}
                   onRegenerateLine={respeakLine}
+                  onSeekLine={setSeekLineId}
+                  avatarUrls={avatarUrls}
                 />
                 <FeedbackComposer
                   disabled={busy || regenerating}
@@ -276,16 +395,28 @@ export function Studio({ user, storyId, onLogout, onHome, onCompose }: Props) {
                   <p className="eyebrow">Cast</p>
                   <ul>
                     {(state?.characters ?? []).map((c) => (
-                      <li key={c.id}>
-                        <strong>{c.name}</strong>
-                        <span className="muted">{c.role.replaceAll('_', ' ')}</span>
-                        <p>{c.personality}</p>
+                      <li key={c.id} className="cast-item">
+                        <CharacterAvatar name={c.name} role={c.role} size="md" imageUrl={avatarUrls.get(c.id)} />
+                        <div>
+                          <strong>{c.name}</strong>
+                          <span className="muted">{c.role.replaceAll('_', ' ')}</span>
+                          <p>{c.personality}</p>
+                        </div>
                       </li>
                     ))}
                     {!state?.characters?.length && <li className="muted">Casting in progress…</li>}
                   </ul>
                 </section>
               </aside>
+            </div>
+
+            <div
+              id="studio-panel-editor"
+              role="tabpanel"
+              aria-labelledby="studio-tab-editor"
+              hidden={tab !== 'editor'}
+            >
+              {editorMounted && <VideoEditor storyId={storyId} active={tab === 'editor'} />}
             </div>
 
             <div
@@ -300,16 +431,124 @@ export function Studio({ user, storyId, onLogout, onHome, onCompose }: Props) {
                 lines={state?.lines ?? []}
                 pending={regenerating || detail.story.status === 'generating'}
                 onPlayScene={(lineId) => {
-                  // Jump the player, then show it: the audio element lives in the
-                  // Episode panel and is only hidden, so the seek still applies.
                   setSeekLineId(lineId)
-                  setTab('episode')
+                  onTab('episode')
                 }}
+              />
+            </div>
+
+            <div
+              id="studio-panel-revisions"
+              role="tabpanel"
+              aria-labelledby="studio-tab-revisions"
+              hidden={tab !== 'revisions'}
+            >
+              <div className="revisions-panel">
+                <StoryTimeMachine
+                  scenes={timelineState?.scenes ?? []}
+                  lines={timelineState?.lines ?? []}
+                  versions={versions}
+                  currentVersionId={detail.version?.id}
+                  baseVersionId={baseVersionId}
+                  loadingVersion={loadingBaseVersion}
+                  disabled={busy || regenerating || detail.story.status !== 'ready' || !detail.version}
+                  onSelectBaseVersion={selectBaseVersion}
+                  onCreateBranch={branchFromScene}
+                />
+                {detail.story.status === 'ready' && (
+                  <AlternateEndings
+                    storyId={storyId}
+                    state={state}
+                    disabled={busy || regenerating}
+                    onRequested={refresh}
+                  />
+                )}
+                {detail.story.status === 'ready' &&
+                  state &&
+                  state.scenes.length > 0 &&
+                  state.lines.length > 0 && (
+                    <ConsistencyPanel
+                      storyId={storyId}
+                      state={state}
+                      disabled={busy || regenerating}
+                    />
+                  )}
+              </div>
+            </div>
+
+            <div
+              id="studio-panel-writers-room"
+              role="tabpanel"
+              aria-labelledby="studio-tab-writers-room"
+              hidden={tab !== 'writers-room'}
+            >
+              <WritersRoomPanel
+                storyId={storyId}
+                ready={detail.story.status === 'ready'}
+              />
+            </div>
+
+            <div
+              id="studio-panel-cliffhanger"
+              role="tabpanel"
+              aria-labelledby="studio-tab-cliffhanger"
+              hidden={tab !== 'cliffhanger'}
+            >
+              <CliffhangerPanel
+                storyId={storyId}
+                ready={detail.story.status === 'ready'}
+              />
+            </div>
+
+            <div
+              id="studio-panel-genome"
+              role="tabpanel"
+              aria-labelledby="studio-tab-genome"
+              hidden={tab !== 'genome'}
+            >
+              <StoryGenomePanel
+                storyId={storyId}
+                ready={detail.story.status === 'ready'}
               />
             </div>
           </>
         )}
       </main>
     </div>
+  )
+}
+
+/**
+ * The handoff from "your video is ready" to the editor.
+ *
+ * A button and a link, both: the button is the obvious next step for someone
+ * already on the page, and the anchor carries the deep link, so it can be
+ * middle-clicked, copied, or pasted into the message that tells someone their
+ * episode is done.
+ */
+function EditorInvite({ storyId, onOpen }: { storyId: string; onOpen: () => void }) {
+  return (
+    <section className="editor-invite">
+      <div>
+        <p className="eyebrow">Make it shareable</p>
+        <p className="muted">
+          Trim it, restyle the captions, cut a vertical version for Reels, lay your own
+          music underneath, and get a link anyone can watch.
+        </p>
+      </div>
+      <a
+        className="btn primary"
+        href={studioLink(storyId, 'editor')}
+        onClick={(event) => {
+          // Same-document navigation, so the click is handled in place rather than
+          // letting the fragment change and the app re-derive the view from it.
+          if (event.metaKey || event.ctrlKey || event.shiftKey || event.button !== 0) return
+          event.preventDefault()
+          onOpen()
+        }}
+      >
+        Open the editor
+      </a>
+    </section>
   )
 }

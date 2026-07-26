@@ -13,8 +13,10 @@ pipeline partway through.
 """
 
 import time
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
+from math import ceil
 from typing import TYPE_CHECKING, Any
+from uuid import uuid4
 
 import redis as redis_lib
 import structlog
@@ -26,29 +28,46 @@ from daastaan_common import (
     get_settings,
     get_store,
     ids,
+    next_version_number,
+    prepare_regeneration_state,
     session_scope,
 )
-from daastaan_common.models import Feedback, IngestJob, MediaAsset, Story, StoryVersion
+from daastaan_common.models import (
+    ConsistencyCheck,
+    Feedback,
+    IngestJob,
+    MediaAsset,
+    Story,
+    StoryVersion,
+    VideoEdit,
+)
 from daastaan_contracts import (
     AssetEvent,
     AssetKind,
     CompleteEvent,
+    ConsistencyCheckStatus,
     FeedbackEvent,
     FeedbackStatus,
     IngestStatus,
     JobStatus,
     MusicStatusEvent,
     Queue,
+    RenderStatus,
     Scope,
     StageName,
     StageProgressEvent,
     StoryState,
     StoryStatus,
     TaskName,
+    VideoEditManifest,
+    build_timeline,
     language_name,
     limits,
+    manifest_digest,
     plan_stages,
+    timeline_duration_ms,
 )
+from sqlalchemy import and_, or_, update
 from sqlmodel import Session, select
 
 from . import prompts, repo
@@ -74,6 +93,7 @@ if TYPE_CHECKING:
     from .ingest import Extraction as IngestExtraction
 from openai import BadRequestError, OpenAIError
 
+from .consistency import review_story_consistency
 from .gateway import PERMANENT_FAILURES, ModelGateway, ModerationBlocked
 from .graph import run_agent_stages
 from .music import MusicServiceClient, MusicServiceError, build_music_brief
@@ -86,6 +106,7 @@ from .tracing import (
     set_pipeline_context,
     start_mlflow_run,
 )
+from .video_edit import AudioSources, Segment, VideoEditError, plan_segments, render_edit
 
 log = structlog.get_logger(__name__)
 
@@ -142,9 +163,17 @@ def _bypass_cache(state: StoryState) -> bool:
     return state.regen is not None
 
 
-def _mark_story(session: Any, story_id: str, status: StoryStatus) -> None:
+def _mark_story(
+    session: Any, story_id: str, version_id: str, status: StoryStatus
+) -> None:
+    """Update global story status only while this is still the active version.
+
+    Celery can finish/retry an older branch after a newer one becomes current.
+    Its completion must not flip the newer branch from generating to ready (or
+    failed) merely because both rows share a story id.
+    """
     story = session.get(Story, story_id)
-    if story:
+    if story and story.current_version_id == version_id:
         story.status = status
         session.add(story)
         session.commit()
@@ -275,7 +304,7 @@ def run_stage(self, version_id: str, stage_value: str, user_id: str) -> str:  # 
             repo.finish_job(session, job, status=JobStatus.FAILED, error=str(exc))
             # If all retries exhausted, mark the story as failed
             if self.request.retries >= self.max_retries:
-                _mark_story(session, state.story_id, StoryStatus.FAILED)
+                _mark_story(session, state.story_id, version_id, StoryStatus.FAILED)
                 log.error(
                     "stage_exhausted_retries",
                     stage=stage_value,
@@ -473,6 +502,70 @@ def gen_image(self, version_id: str, scene_id: str, user_id: str, shot_type: str
     return scene_id
 
 
+@celery_app.task(name=TaskName.GEN_AVATAR.value, bind=True, **RETRY_KWARGS)
+def gen_avatar(self, version_id: str, character_id: str, user_id: str) -> str | None:  # type: ignore[no-untyped-def]
+    """Generate a DALL-E portrait for one character."""
+    init_tracing()
+    dedupe = ids.dedupe_key(AssetKind.CHARACTER_AVATAR, line_id=character_id)
+
+    with session_scope() as session:
+        if repo.find_asset(session, version_id=version_id, dedupe_key=dedupe):
+            return character_id
+
+        claim = repo.claim_asset(
+            session, version_id=version_id, kind=AssetKind.CHARACTER_AVATAR, dedupe_key=dedupe
+        )
+        if claim is None:
+            return character_id
+
+        state = repo.load_state(session, version_id)
+        character = next((c for c in state.characters if c.id == character_id), None)
+        if character is None:
+            repo.release_claim(session, claim)
+            raise LookupError(f"character {character_id} not in version {version_id}")
+
+        mood = state.mood.mood if state.mood else "neutral"
+        prompt = prompts.character_avatar_prompt(character, mood)
+
+        try:
+            gateway = ModelGateway(
+                session,
+                stage=StageName.IMAGE_GENERATION.value,
+                version_id=version_id,
+                user_id=user_id,
+                story_id=state.story_id,
+                bypass_cache=_bypass_cache(state),
+            )
+            image = gateway.image(prompt=prompt, size="1024x1024")
+        except (BadRequestError, OpenAIError) as exc:
+            error_body = str(exc)
+            is_moderation = "moderation" in error_body or "safety" in error_body
+            if is_moderation:
+                repo.release_claim(session, claim)
+                log.warning("avatar_moderation_blocked", character_id=character_id, error=error_body[:300])
+                return character_id
+            repo.release_claim(session, claim)
+            raise
+        except Exception:
+            repo.release_claim(session, claim)
+            raise
+
+        key = ids.object_key(version_id, AssetKind.CHARACTER_AVATAR, line_id=character_id, ext="png")
+        get_store().put(key, image, "image/png")
+        repo.record_asset(
+            session,
+            version_id=version_id,
+            kind=AssetKind.CHARACTER_AVATAR,
+            dedupe_key=dedupe,
+            object_key=key,
+            content_type="image/png",
+            line_id=character_id,
+            size_bytes=len(image),
+        )
+        repo.publish(state.story_id, AssetEvent(kind=AssetKind.CHARACTER_AVATAR, scene_id=character_id))
+    return character_id
+
+
 @celery_app.task(name=TaskName.GEN_MUSIC.value, bind=True)
 def gen_music(self, version_id: str, user_id: str) -> str | None:  # type: ignore[no-untyped-def]
     """Generate one loopable instrumental bed through the private Mac sidecar.
@@ -665,11 +758,11 @@ def assemble(self, version_id: str, user_id: str) -> str:  # type: ignore[no-unt
             if state.output_format in ("video", "both"):
                 compose_video_task.si(version_id, user_id).apply_async(queue=Queue.ASSEMBLY.value)
             else:
-                _mark_story(session, state.story_id, StoryStatus.READY)
+                _mark_story(session, state.story_id, version_id, StoryStatus.READY)
                 repo.publish(state.story_id, CompleteEvent(version_id=version_id))
         except Exception as exc:
             repo.finish_job(session, job, status=JobStatus.FAILED, error=str(exc))
-            _mark_story(session, state.story_id, StoryStatus.FAILED)
+            _mark_story(session, state.story_id, version_id, StoryStatus.FAILED)
             raise
     return version_id
 
@@ -689,7 +782,7 @@ def compose_video_task(self, version_id: str, user_id: str) -> str:  # type: ign
         try:
             if state.output_format not in ("video", "both"):
                 repo.finish_job(session, job, status=JobStatus.SKIPPED)
-                _mark_story(session, state.story_id, StoryStatus.READY)
+                _mark_story(session, state.story_id, version_id, StoryStatus.READY)
                 repo.publish(state.story_id, CompleteEvent(version_id=version_id))
                 return version_id
 
@@ -772,11 +865,11 @@ def compose_video_task(self, version_id: str, user_id: str) -> str:  # type: ign
             state.final_video_key = key
             repo.save_state(session, state)
             repo.finish_job(session, job, status=JobStatus.SUCCEEDED)
-            _mark_story(session, state.story_id, StoryStatus.READY)
+            _mark_story(session, state.story_id, version_id, StoryStatus.READY)
             repo.publish(state.story_id, CompleteEvent(version_id=version_id))
         except Exception as exc:
             repo.finish_job(session, job, status=JobStatus.FAILED, error=str(exc))
-            _mark_story(session, state.story_id, StoryStatus.FAILED)
+            _mark_story(session, state.story_id, version_id, StoryStatus.FAILED)
             raise
     return version_id
 
@@ -861,6 +954,15 @@ def fan_out(
             image_tasks = []
             image_total = 0
 
+        # Character avatar portraits — one per character, alongside other media.
+        # Not counted in image_total: they don't report against IMAGE_GENERATION
+        # progress and should not inflate the stepper denominator.
+        avatar_tasks = [
+            gen_avatar.si(version_id, char.id, user_id)
+            for char in state.characters
+            if ids.dedupe_key(AssetKind.CHARACTER_AVATAR, line_id=char.id) not in existing
+        ]
+
         # Opened here, closed by `assemble`: neither stage has a task of its own
         # to report against, and without these rows the stepper can never pass 80%.
         repo.start_job(
@@ -904,7 +1006,7 @@ def fan_out(
                 error="Background score is disabled.",
             )
 
-    jobs = [*line_tasks, *image_tasks]
+    jobs = [*line_tasks, *image_tasks, *avatar_tasks]
     # A committed empty slot is a recoverable interrupted generation, not an
     # asset. Re-submit it under the same sidecar idempotency key so it resumes
     # safely instead of producing a permanent narration-only version.
@@ -924,7 +1026,7 @@ def _on_pipeline_error(version_id: str, user_id: str) -> None:
     """link_error callback: mark the story FAILED when any chained task fails."""
     with session_scope() as session:
         state = repo.load_state(session, version_id)
-        _mark_story(session, state.story_id, StoryStatus.FAILED)
+        _mark_story(session, state.story_id, version_id, StoryStatus.FAILED)
 
 
 @celery_app.task(name="daastaan.pipeline.on_error", bind=True)
@@ -935,7 +1037,7 @@ def pipeline_error_handler(self, request, exc, traceback, version_id: str = "", 
     with session_scope() as session:
         try:
             state = repo.load_state(session, version_id)
-            _mark_story(session, state.story_id, StoryStatus.FAILED)
+            _mark_story(session, state.story_id, version_id, StoryStatus.FAILED)
             log.error("chain_failed_marking_story", version_id=version_id, error=str(exc))
         except Exception:
             log.error("error_handler_failed", version_id=version_id, exc_info=True)
@@ -1010,7 +1112,7 @@ def run_pipeline(self, story_id: str, version_id: str, user_id: str) -> str:  # 
             error=str(exc),
         )
         with session_scope() as session:
-            _mark_story(session, story_id, StoryStatus.FAILED)
+            _mark_story(session, story_id, version_id, StoryStatus.FAILED)
             if pipeline_run:
                 try:
                     run = session.get(type(pipeline_run), pipeline_run.id)
@@ -1106,8 +1208,13 @@ def _fail_feedback(story_id: str, feedback_id: str, exc: Exception) -> None:
 
             story = session.get(Story, story_id)
             # Only undo the `generating` the API set for this request. If a
-            # regeneration is already running, leave it alone.
-            if story and story.status == StoryStatus.GENERATING:
+            # newer branch is now current, leave it alone.
+            if (
+                story
+                and feedback is not None
+                and story.current_version_id == feedback.version_id
+                and story.status == StoryStatus.GENERATING
+            ):
                 story.status = StoryStatus.READY
                 session.add(story)
             session.commit()
@@ -1187,46 +1294,59 @@ def _interpret_feedback(story_id: str, version_id: str, user_id: str, feedback_i
 
         target_id = _resolve_target(state, scope, directive.target_id)
 
+        # The feedback endpoint marks the story generating before dispatch, but
+        # an old/retried interpreter can still wake after a newer version wins.
+        # Lock and compare the pointer just before mutating it so it cannot
+        # resurrect a stale feedback branch.
+        story = session.exec(
+            select(Story)
+            .where(Story.id == story_id)
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        ).one_or_none()
+        if story is None or story.current_version_id != version_id:
+            raise ValueError("feedback was superseded by a newer story version")
+
         parent = session.get(StoryVersion, version_id)
+        if parent is None or parent.story_id != story_id:
+            raise LookupError(f"story version {version_id} not found")
         child = StoryVersion(
             story_id=story_id,
             parent_version_id=version_id,
-            version_number=(parent.version_number if parent else 1) + 1,
-            genre=parent.genre if parent else None,
-            mood=parent.mood if parent else None,
-            state_json=dict(parent.state_json) if parent else {},
+            version_number=next_version_number(session, story_id=story_id),
+            genre=parent.genre,
+            mood=parent.mood,
+            state_json=dict(parent.state_json),
             created_from_feedback_id=feedback_id,
         )
         session.add(child)
         session.flush()
 
-        if parent:
-            carry_over_assets(
-                session,
-                parent_version_id=parent.id,
-                child_version_id=child.id,
-                state=state,
-                scope=scope,
-                planned=planned,
-                target_id=target_id,
-            )
+        carry_over_assets(
+            session,
+            parent_version_id=parent.id,
+            child_version_id=child.id,
+            state=state,
+            scope=scope,
+            planned=planned,
+            target_id=target_id,
+        )
 
-        child.state_json["version_id"] = child.id
-        child.state_json["regen"] = {
-            "scope": scope.value,
-            "target_stage": target_stage.value,
-            "target_id": target_id,
-            "instruction_delta": directive.instruction_delta,
-        }
+        child.state_json = prepare_regeneration_state(
+            parent.state_json,
+            child_version_id=child.id,
+            scope=scope,
+            target_stage=target_stage,
+            target_id=target_id,
+            instruction_delta=directive.instruction_delta,
+        )
 
         feedback.directive_json = directive.model_dump()
         feedback.resulting_version_id = child.id
         feedback.status = FeedbackStatus.APPLIED
         feedback.error = None
-        story = session.get(Story, story_id)
-        if story:
-            story.current_version_id = child.id
-            story.status = StoryStatus.GENERATING
+        story.current_version_id = child.id
+        story.status = StoryStatus.GENERATING
         session.commit()
         new_version_id = child.id
 
@@ -1251,6 +1371,283 @@ def _interpret_feedback(story_id: str, version_id: str, user_id: str, feedback_i
         directive.instruction_delta,
     ).apply_async(queue=Queue.AGENTS.value)
     return new_version_id
+
+
+# --- Plot Hole Hunter ------------------------------------------------------
+
+
+_CONSISTENCY_FAILURE = "Consistency check could not be completed. Please try again."
+_CONSISTENCY_RETRYING = "Consistency check is retrying."
+# The generic Celery task hard limit is 15 minutes. A lease longer than that
+# means a live worker cannot be superseded, while a worker-lost task eventually
+# becomes reclaimable on redelivery instead of remaining "running" forever.
+_CONSISTENCY_LEASE = timedelta(minutes=20)
+_CONSISTENCY_LEASE_WAKEUP_BUFFER_SECONDS = 1
+
+
+def _as_utc(value: datetime) -> datetime:
+    """Normalise timestamps read from SQLite/Postgres before lease arithmetic."""
+    return value.replace(tzinfo=UTC) if value.tzinfo is None else value.astimezone(UTC)
+
+
+def _consistency_lease_wakeup_delay(check: ConsistencyCheck) -> int | None:
+    """Return a safe wake-up delay for a currently held lease, if any.
+
+    A redelivered Celery task must not acknowledge the only recovery signal for
+    a worker that died after claiming the row.  Scheduling a lightweight wakeup
+    at the expiry boundary lets that later delivery reclaim the lease without
+    making a second model call while the original worker is still healthy.
+    """
+    if check.status != ConsistencyCheckStatus.RUNNING.value or check.started_at is None:
+        return None
+
+    remaining = (_as_utc(check.started_at) + _CONSISTENCY_LEASE - _utcnow()).total_seconds()
+    # ``ceil`` means the ETA never rounds down before the lease boundary; the
+    # small buffer covers broker timing granularity and host clock jitter.
+    return max(1, ceil(remaining) + _CONSISTENCY_LEASE_WAKEUP_BUFFER_SECONDS)
+
+
+def _schedule_consistency_lease_wakeup(
+    task: Any, *, check_id: str, user_id: str, countdown: int
+) -> None:
+    """Queue a non-paying recovery delivery on the same agents queue.
+
+    ``RequestIdTask.apply_async`` carries the current request-id header forward
+    automatically, so the recovery remains connected to the original browser
+    request in worker logs.
+    """
+    task.apply_async(
+        kwargs={"check_id": check_id, "user_id": user_id},
+        queue=Queue.AGENTS.value,
+        countdown=countdown,
+    )
+
+
+def _claim_consistency_check(session: Any, check: ConsistencyCheck) -> str | None:
+    """Atomically claim the one model call allowed for a check row.
+
+    Celery is at-least-once. Two deliveries can both read ``pending`` before
+    either commits, so inspecting Python state is insufficient; the conditional
+    SQL UPDATE is the actual idempotency boundary. A long-dead running lease is
+    eligible again so worker loss does not strand the UI forever.
+    """
+    if check.status == ConsistencyCheckStatus.SUCCEEDED.value:
+        return None
+    if check.status not in {
+        ConsistencyCheckStatus.PENDING.value,
+        ConsistencyCheckStatus.RUNNING.value,
+    }:
+        return None
+
+    claimed_at = _utcnow()
+    stale_before = claimed_at - _CONSISTENCY_LEASE
+    if check.status == ConsistencyCheckStatus.RUNNING.value:
+        started_at = _as_utc(check.started_at) if check.started_at is not None else None
+        if started_at is not None and started_at > stale_before:
+            return None
+
+    run_token = uuid4().hex
+    claimable = or_(
+        ConsistencyCheck.status == ConsistencyCheckStatus.PENDING.value,
+        and_(
+            ConsistencyCheck.status == ConsistencyCheckStatus.RUNNING.value,
+            or_(
+                ConsistencyCheck.started_at.is_(None),
+                ConsistencyCheck.started_at <= stale_before,
+            ),
+        ),
+    )
+    result = session.execute(
+        update(ConsistencyCheck)
+        # This condition intentionally belongs entirely to the database.  In
+        # SQLite test sessions SQLAlchemy otherwise tries to evaluate the
+        # timestamp comparison against an in-memory naïve datetime before the
+        # atomic UPDATE runs, while the production/Postgres comparison is safe.
+        .execution_options(synchronize_session=False)
+        .where(ConsistencyCheck.id == check.id, claimable)
+        .values(
+            status=ConsistencyCheckStatus.RUNNING.value,
+            error=None,
+            started_at=claimed_at,
+            finished_at=None,
+            run_token=run_token,
+            # Legacy/manual pending rows can lack the API-created active key.
+            # Restoring it here preserves the database-level one-active-review
+            # invariant for every row that a worker touches.
+            active_key=check.version_id,
+        )
+    )
+    if result.rowcount != 1:
+        return None
+    session.commit()
+    return run_token
+
+
+def _record_consistency_failure(
+    check_id: str, *, retrying: bool, run_token: str | None
+) -> None:
+    """Persist a public-safe failure state outside the rolled-back task session."""
+    try:
+        with session_scope() as session:
+            check = session.get(ConsistencyCheck, check_id)
+            if check is None:
+                return
+            story_id = check.story_id
+            check_status = (
+                ConsistencyCheckStatus.PENDING.value
+                if retrying
+                else ConsistencyCheckStatus.FAILED.value
+            )
+            error = _CONSISTENCY_RETRYING if retrying else _CONSISTENCY_FAILURE
+            where = [ConsistencyCheck.id == check_id]
+            if run_token:
+                # Never let a crashed/slow old lease overwrite a newer worker's
+                # result after the stale-lease recovery path has reclaimed it.
+                where.append(ConsistencyCheck.run_token == run_token)
+            else:
+                where.append(ConsistencyCheck.status == ConsistencyCheckStatus.PENDING.value)
+            values: dict[str, Any] = {
+                "status": check_status,
+                "error": error,
+                "finished_at": None if retrying else _utcnow(),
+            }
+            if not retrying:
+                values["active_key"] = None
+            result = session.execute(
+                update(ConsistencyCheck)
+                .where(*where)
+                .values(**values)
+            )
+            if result.rowcount != 1:
+                return
+            session.commit()
+        repo.publish(
+            story_id,
+            {
+                "type": "consistency_check",
+                "check_id": check_id,
+                "status": check_status,
+            },
+        )
+    except Exception:
+        # This is a status aid rather than the task result itself; never hide
+        # the original model/database exception behind a secondary write error.
+        log.exception("consistency_failure_not_recorded", check_id=check_id)
+
+
+@celery_app.task(name=TaskName.CONSISTENCY_CHECK.value, bind=True, **RETRY_KWARGS)
+def check_story_consistency(self, check_id: str, user_id: str) -> str:  # type: ignore[no-untyped-def]
+    """Run a lightweight, read-only consistency review for one finished version.
+
+    This task does not create a ``Job`` row, alter ``Story.status``, or enter the
+    stage registry: a quality inspection must not make a finished episode look
+    like it is being regenerated. Its own durable row gives the UI something to
+    poll and preserves a short audit history.
+    """
+    # The durable check row, not a broker payload, is the authority for story
+    # ownership and cost attribution. Keeping this argument preserves the wire
+    # contract with the API dispatcher while preventing a tampered value from
+    # selecting a different account for the model ledger.
+    del user_id
+    init_tracing()
+    run_token: str | None = None
+    try:
+        with session_scope() as session:
+            check = session.get(ConsistencyCheck, check_id)
+            if check is None:
+                raise LookupError(f"consistency check {check_id} not found")
+
+            run_token = _claim_consistency_check(session, check)
+            if run_token is None:
+                # Refresh after a failed conditional UPDATE: this delivery may
+                # have read ``pending`` just before a competing worker claimed
+                # it.  In either that race or a direct redelivery, a fresh
+                # running lease needs a later wakeup so a worker crash does not
+                # strand the check forever after this task is acknowledged.
+                session.refresh(check)
+                countdown = _consistency_lease_wakeup_delay(check)
+                if countdown is not None:
+                    _schedule_consistency_lease_wakeup(
+                        self,
+                        check_id=check_id,
+                        user_id=check.user_id,
+                        countdown=countdown,
+                    )
+                    log.info(
+                        "consistency_check_lease_wakeup_scheduled",
+                        check_id=check_id,
+                        countdown_seconds=countdown,
+                    )
+                # A duplicate/redelivered task never touches the paid gateway.
+                return check_id
+
+            story_id, version_id, owner_id = check.story_id, check.version_id, check.user_id
+            version = session.get(StoryVersion, version_id)
+            if version is None or version.story_id != story_id:
+                raise LookupError("consistency check version is unavailable")
+
+            state = repo.load_state(session, version_id)
+            if state.story_id != story_id or not state.scenes or not state.lines:
+                raise ValueError("consistency check requires a completed story structure")
+
+            gateway = ModelGateway(
+                session,
+                stage="plot_hole_hunter",
+                version_id=version_id,
+                user_id=owner_id,
+                story_id=story_id,
+            )
+            summary, findings = review_story_consistency(state, gateway)
+
+            # Persist only the verified, bounded model projection returned by
+            # ``review_story_consistency``; never save a raw completion.
+            result = session.execute(
+                update(ConsistencyCheck)
+                .where(
+                    ConsistencyCheck.id == check_id,
+                    ConsistencyCheck.status == ConsistencyCheckStatus.RUNNING.value,
+                    ConsistencyCheck.run_token == run_token,
+                )
+                .values(
+                    summary=summary,
+                    findings_json=[finding.model_dump(mode="json") for finding in findings],
+                    status=ConsistencyCheckStatus.SUCCEEDED.value,
+                    error=None,
+                    finished_at=_utcnow(),
+                    active_key=None,
+                )
+            )
+            if result.rowcount != 1:
+                # A stale worker lost its lease while a newer one took over.
+                # Its output is intentionally discarded rather than overwriting
+                # the durable result, even though the call has already completed.
+                session.commit()
+                log.warning("consistency_check_lease_lost", check_id=check_id)
+                return check_id
+            session.commit()
+
+        repo.publish(
+            story_id,
+            {
+                "type": "consistency_check",
+                "check_id": check_id,
+                "status": ConsistencyCheckStatus.SUCCEEDED.value,
+            },
+        )
+        log.info(
+            "consistency_check_completed",
+            check_id=check_id,
+            version_id=version_id,
+            findings=len(findings),
+        )
+        return check_id
+    except Exception as exc:
+        _record_consistency_failure(
+            check_id,
+            retrying=_will_retry(self, exc),
+            run_token=run_token,
+        )
+        raise
 
 
 # --- audio export ----------------------------------------------------------
@@ -1362,6 +1759,207 @@ def export_bgm(self, version_id: str, user_id: str, fmt: str) -> str:  # type: i
 
     log.info("bgm_export_ready", version_id=version_id, fmt=fmt, bytes=len(data))
     return asset_id
+
+
+# --- video editor ----------------------------------------------------------
+
+
+@celery_app.task(name=TaskName.RENDER_VIDEO_EDIT.value, bind=True, **RETRY_KWARGS)
+def render_video_edit(self, edit_id: str, user_id: str) -> str:  # type: ignore[no-untyped-def]
+    """Render one edited cut described by a `video_edits` manifest.
+
+    Rebuilt from the pipeline's source assets rather than re-cut from
+    `final_video` - see `daastaan_agent.video_edit` for why. Runs on the assembly
+    pool, which is where ffmpeg lives and where concurrency is 1, so a long encode
+    cannot starve the media workers.
+
+    Rendering never touches `StoryState` or the story's status. A cut is
+    downstream of a finished episode, and a failed export must not make a story
+    that plays perfectly well look broken.
+    """
+    init_tracing()
+
+    with session_scope() as session:
+        edit = session.get(VideoEdit, edit_id)
+        if edit is None:
+            raise LookupError(f"video edit {edit_id} not found")
+
+        manifest = VideoEditManifest.model_validate(edit.manifest_json)
+        digest = manifest_digest(manifest)
+        # A redelivery of a render that already landed must not encode again.
+        if edit.status == RenderStatus.READY and edit.rendered_manifest_hash == digest:
+            log.info("edit_render_cached", edit_id=edit_id)
+            return edit.render_asset_id or edit_id
+
+        edit.status = RenderStatus.RENDERING
+        edit.error = None
+        edit.render_started_at = datetime.now(UTC)
+        session.add(edit)
+        session.commit()
+        version_id, story_id = edit.version_id, edit.story_id
+
+    try:
+        with session_scope() as session:
+            state = repo.load_state(session, version_id)
+            sources, segments, trim = _gather_edit_inputs(session, state, manifest)
+
+        video = render_edit(
+            manifest,
+            segments,
+            sources,
+            trim_start_ms=trim[0],
+            trim_end_ms=trim[1],
+        )
+
+        # Keyed by manifest digest, so re-rendering an unchanged cut is a lookup
+        # and a changed one lands on a new asset id. That second part matters:
+        # `/api/media` marks bytes immutable, so reusing the id for new content
+        # would leave the old cut in every browser cache that had seen it.
+        dedupe = f"{AssetKind.EDITED_VIDEO.value}:{edit_id}:{digest}"
+        key = ids.object_key(version_id, AssetKind.EDITED_VIDEO, tag=digest, ext="mp4")
+        get_store().put(key, video, "video/mp4")
+
+        with session_scope() as session:
+            asset = repo.record_asset(
+                session,
+                version_id=version_id,
+                kind=AssetKind.EDITED_VIDEO,
+                dedupe_key=dedupe,
+                object_key=key,
+                content_type="video/mp4",
+                size_bytes=len(video),
+                duration_ms=sum(segment.duration_ms for segment in segments),
+            )
+            edit = session.get(VideoEdit, edit_id)
+            if edit is not None:
+                edit.status = RenderStatus.READY
+                edit.render_asset_id = asset.id
+                edit.rendered_manifest_hash = digest
+                edit.error = None
+                edit.render_finished_at = datetime.now(UTC)
+                edit.updated_at = datetime.now(UTC)
+                session.add(edit)
+            session.commit()
+            asset_id = asset.id
+
+        log.info("edit_render_ready", edit_id=edit_id, story_id=story_id, bytes=len(video))
+        return asset_id
+    except Exception as exc:
+        # Recorded on the row rather than only raised: the editor polls this, and
+        # Celery's own result backend expires long before someone comes back to
+        # find out why their export never appeared.
+        with session_scope() as session:
+            edit = session.get(VideoEdit, edit_id)
+            if edit is not None:
+                edit.status = RenderStatus.FAILED
+                edit.error = str(exc)[:2000]
+                edit.render_finished_at = datetime.now(UTC)
+                edit.updated_at = datetime.now(UTC)
+                session.add(edit)
+                session.commit()
+        log.error("edit_render_failed", edit_id=edit_id, exc_info=True)
+        raise
+
+
+def _gather_edit_inputs(
+    session: Session, state: StoryState, manifest: VideoEditManifest
+) -> tuple[AudioSources, list[Segment], tuple[int, int]]:
+    """Collect the artwork, audio and timeline one cut needs.
+
+    The narration is rebuilt from the per-line clips rather than taken from the
+    finished mix, which is what keeps the score a separate layer the manifest can
+    drop. It also means both the clips and the artwork are hard requirements: an
+    episode missing either cannot be cut, and the editor refuses to open against
+    one rather than presenting controls that would fail here.
+    """
+    version_id = state.version_id
+    store = get_store()
+
+    audio_assets = {
+        asset.line_id: asset
+        for asset in session.exec(
+            select(MediaAsset).where(
+                MediaAsset.version_id == version_id,
+                MediaAsset.kind == AssetKind.LINE_AUDIO.value,
+                MediaAsset.object_key != "",
+            )
+        ).all()
+        if asset.line_id
+    }
+
+    durations = {
+        line_id: asset.duration_ms or 0 for line_id, asset in audio_assets.items()
+    }
+    spans = build_timeline(state.lines, durations)
+    if not spans:
+        raise VideoEditError("this episode has no synthesised lines to cut")
+
+    images: dict[str, bytes] = {}
+    for asset in session.exec(
+        select(MediaAsset).where(
+            MediaAsset.version_id == version_id,
+            MediaAsset.kind == AssetKind.SCENE_IMAGE.value,
+            MediaAsset.object_key != "",
+        )
+    ).all():
+        slot = asset.line_id or asset.scene_id
+        if slot:
+            images[slot] = store.get(asset.object_key)
+    if not images:
+        raise VideoEditError("this episode has no scene artwork to cut")
+
+    segments = plan_segments(spans, images, manifest)
+
+    clips = [
+        Clip(
+            audio=store.get(audio_assets[span.line_id].object_key),
+            pause_after_ms=span.pause_ms,
+        )
+        for span in spans
+    ]
+    narration = compose_episode(clips)
+
+    score: bytes | None = None
+    if manifest.audio.keep_score:
+        score_asset = session.exec(
+            select(MediaAsset).where(
+                MediaAsset.version_id == version_id,
+                MediaAsset.kind == AssetKind.MUSIC_BED.value,
+                MediaAsset.object_key != "",
+            )
+        ).first()
+        if score_asset is not None:
+            try:
+                score = store.get(score_asset.object_key)
+            except Exception:
+                # The same rule assembly follows: a missing optional cue degrades
+                # the cut, it does not fail it.
+                log.warning("edit_score_missing", version_id=version_id, exc_info=True)
+
+    local: bytes | None = None
+    if manifest.audio.local_asset_id:
+        local_asset = session.get(MediaAsset, manifest.audio.local_asset_id)
+        if (
+            local_asset is None
+            or local_asset.version_id != version_id
+            or local_asset.kind != AssetKind.LOCAL_AUDIO.value
+            or not local_asset.object_key
+        ):
+            # Checked here as well as at the API boundary, because a manifest can
+            # be rendered long after it was saved and the asset it names is the
+            # one thing in it that another request could have removed.
+            raise VideoEditError("the backing track named by this cut is unavailable")
+        local = store.get(local_asset.object_key)
+
+    trim_end = (
+        manifest.trim.end_ms
+        if manifest.trim.end_ms is not None
+        else timeline_duration_ms(spans)
+    )
+    return AudioSources(narration=narration, score=score, local=local), segments, (
+        manifest.trim.start_ms,
+        trim_end,
+    )
 
 
 # --- document ingest -------------------------------------------------------
@@ -1498,6 +2096,150 @@ def _fail_ingest(ingest_id: str, exc: Exception) -> None:
                 session.commit()
     except Exception:
         log.exception("ingest_failure_not_recorded", ingest_id=ingest_id)
+
+
+# --- post-production analysis ----------------------------------------------
+
+
+@celery_app.task(name=TaskName.WRITERS_ROOM.value, bind=True, **RETRY_KWARGS)
+def run_writers_room_task(self, version_id: str, user_id: str, session_id: str) -> str:  # type: ignore[no-untyped-def]
+    """Run the AI Writers Room analysis on a finished story."""
+    from daastaan_common.models import WritersRoomSession
+
+    from .writers_room import run_writers_room
+
+    init_tracing()
+    with session_scope() as session:
+        row = session.get(WritersRoomSession, session_id)
+        if row is None:
+            raise LookupError(f"writers room session {session_id} not found")
+        row.status = "running"
+        session.commit()
+
+    try:
+        with session_scope() as session:
+            state = repo.load_state(session, version_id)
+            gateway = ModelGateway(
+                session,
+                stage="writers_room",
+                version_id=version_id,
+                user_id=user_id,
+                story_id=state.story_id,
+            )
+            result = run_writers_room(state, gateway)
+
+        with session_scope() as session:
+            row = session.get(WritersRoomSession, session_id)
+            if row:
+                row.status = "succeeded"
+                row.result_json = result.model_dump()
+                row.finished_at = _utcnow()
+                session.commit()
+    except Exception as exc:
+        with session_scope() as session:
+            row = session.get(WritersRoomSession, session_id)
+            if row:
+                row.status = "failed"
+                row.error = str(exc)[:2000]
+                row.finished_at = _utcnow()
+                session.commit()
+        raise
+
+    return session_id
+
+
+@celery_app.task(name=TaskName.CLIFFHANGER.value, bind=True, **RETRY_KWARGS)
+def run_cliffhanger_task(self, version_id: str, user_id: str, session_id: str) -> str:  # type: ignore[no-untyped-def]
+    """Run the Cliffhanger Optimizer analysis on a finished story."""
+    from daastaan_common.models import CliffhangerAnalysis
+
+    from .cliffhanger import analyze_cliffhanger
+
+    init_tracing()
+    with session_scope() as session:
+        row = session.get(CliffhangerAnalysis, session_id)
+        if row is None:
+            raise LookupError(f"cliffhanger analysis {session_id} not found")
+        row.status = "running"
+        session.commit()
+
+    try:
+        with session_scope() as session:
+            state = repo.load_state(session, version_id)
+            gateway = ModelGateway(
+                session,
+                stage="cliffhanger",
+                version_id=version_id,
+                user_id=user_id,
+                story_id=state.story_id,
+            )
+            result = analyze_cliffhanger(state, gateway)
+
+        with session_scope() as session:
+            row = session.get(CliffhangerAnalysis, session_id)
+            if row:
+                row.status = "succeeded"
+                row.result_json = result.model_dump()
+                row.finished_at = _utcnow()
+                session.commit()
+    except Exception as exc:
+        with session_scope() as session:
+            row = session.get(CliffhangerAnalysis, session_id)
+            if row:
+                row.status = "failed"
+                row.error = str(exc)[:2000]
+                row.finished_at = _utcnow()
+                session.commit()
+        raise
+
+    return session_id
+
+
+@celery_app.task(name=TaskName.STORY_GENOME.value, bind=True, **RETRY_KWARGS)
+def run_story_genome_task(self, version_id: str, user_id: str, session_id: str) -> str:  # type: ignore[no-untyped-def]
+    """Run the Story Genome analysis on a finished story."""
+    from daastaan_common.models import StoryGenomeAnalysis
+
+    from .story_genome import analyze_genome
+
+    init_tracing()
+    with session_scope() as session:
+        row = session.get(StoryGenomeAnalysis, session_id)
+        if row is None:
+            raise LookupError(f"story genome analysis {session_id} not found")
+        row.status = "running"
+        session.commit()
+
+    try:
+        with session_scope() as session:
+            state = repo.load_state(session, version_id)
+            gateway = ModelGateway(
+                session,
+                stage="story_genome",
+                version_id=version_id,
+                user_id=user_id,
+                story_id=state.story_id,
+            )
+            result = analyze_genome(state, gateway)
+
+        with session_scope() as session:
+            row = session.get(StoryGenomeAnalysis, session_id)
+            if row:
+                row.status = "succeeded"
+                row.result_json = result.model_dump()
+                row.finished_at = _utcnow()
+                session.commit()
+    except Exception as exc:
+        with session_scope() as session:
+            row = session.get(StoryGenomeAnalysis, session_id)
+            if row:
+                row.status = "failed"
+                row.error = str(exc)[:2000]
+                row.finished_at = _utcnow()
+                session.commit()
+        raise
+
+    return session_id
 
 
 def _resolve_target(state: StoryState, scope: Scope, target_id: str | None) -> str | None:
