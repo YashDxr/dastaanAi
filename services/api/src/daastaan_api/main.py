@@ -20,6 +20,7 @@ from fastapi.responses import JSONResponse
 from .routers import (
     admin,
     auth,
+    cliffhanger,
     consistency,
     exports,
     feedback,
@@ -29,8 +30,10 @@ from .routers import (
     progress,
     share,
     stories,
+    story_genome,
     studio,
     video_editor,
+    writers_room,
 )
 
 log = structlog.get_logger(__name__)
@@ -99,6 +102,9 @@ for router in (
     exports.router,
     video_editor.router,
     share.router,
+    writers_room.router,
+    cliffhanger.router,
+    story_genome.router,
     progress.sse_router,
 ):
     app.include_router(router, prefix="/api")

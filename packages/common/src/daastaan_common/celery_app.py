@@ -55,6 +55,10 @@ def create_celery(name: str = "daastaan") -> Celery:
             TaskName.EXPORT_AUDIO.value: {"queue": Queue.ASSEMBLY.value},
             TaskName.EXPORT_BGM.value: {"queue": Queue.ASSEMBLY.value},
             TaskName.RENDER_VIDEO_EDIT.value: {"queue": Queue.ASSEMBLY.value},
+            # Post-production analysis features — all run on the agents pool.
+            TaskName.WRITERS_ROOM.value: {"queue": Queue.AGENTS.value},
+            TaskName.CLIFFHANGER.value: {"queue": Queue.AGENTS.value},
+            TaskName.STORY_GENOME.value: {"queue": Queue.AGENTS.value},
         },
     )
     return app

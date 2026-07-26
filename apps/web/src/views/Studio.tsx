@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { AppHeader } from '../components/AppHeader'
 import { AlternateEndings } from '../components/AlternateEndings'
 import { AudioPlayer } from '../components/AudioPlayer'
+import { CliffhangerPanel } from '../components/CliffhangerPanel'
 import { VideoPlayer, VideoPlayerEmpty } from '../components/VideoPlayer'
 import { FeedbackComposer } from '../components/FeedbackComposer'
 import { ConsistencyPanel } from '../components/ConsistencyPanel'
@@ -11,6 +12,8 @@ import { ScriptPanel } from '../components/ScriptPanel'
 import { CharacterAvatar } from '../components/CharacterAvatar'
 import { VideoEditor } from '../components/editor/VideoEditor'
 import { StoryTimeMachine } from '../components/StoryTimeMachine'
+import { StoryGenomePanel } from '../components/StoryGenomePanel'
+import { WritersRoomPanel } from '../components/WritersRoomPanel'
 import { formatError, stories as storiesApi, watchProgress } from '../api'
 import { applyEvent, emptyLive } from '../live'
 import { studioLink } from '../routing'
@@ -292,6 +295,9 @@ export function Studio({ user, storyId, tab, onTab, onLogout, onHome, onCompose 
                   ['episode', 'Episode'],
                   ['scenes', 'Scenes'],
                   ['editor', 'Editor'],
+                  ['writers-room', 'Writers Room'],
+                  ['cliffhanger', 'Cliffhanger'],
+                  ['genome', 'Story DNA'],
                 ] as const
               ).map(([id, label]) => (
                 <button
@@ -444,11 +450,45 @@ export function Studio({ user, storyId, tab, onTab, onLogout, onHome, onCompose 
                 lines={state?.lines ?? []}
                 pending={regenerating || detail.story.status === 'generating'}
                 onPlayScene={(lineId) => {
-                  // Jump the player, then show it: the audio element lives in the
-                  // Episode panel and is only hidden, so the seek still applies.
                   setSeekLineId(lineId)
                   onTab('episode')
                 }}
+              />
+            </div>
+
+            <div
+              id="studio-panel-writers-room"
+              role="tabpanel"
+              aria-labelledby="studio-tab-writers-room"
+              hidden={tab !== 'writers-room'}
+            >
+              <WritersRoomPanel
+                storyId={storyId}
+                ready={detail.story.status === 'ready'}
+              />
+            </div>
+
+            <div
+              id="studio-panel-cliffhanger"
+              role="tabpanel"
+              aria-labelledby="studio-tab-cliffhanger"
+              hidden={tab !== 'cliffhanger'}
+            >
+              <CliffhangerPanel
+                storyId={storyId}
+                ready={detail.story.status === 'ready'}
+              />
+            </div>
+
+            <div
+              id="studio-panel-genome"
+              role="tabpanel"
+              aria-labelledby="studio-tab-genome"
+              hidden={tab !== 'genome'}
+            >
+              <StoryGenomePanel
+                storyId={storyId}
+                ready={detail.story.status === 'ready'}
               />
             </div>
           </>

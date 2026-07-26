@@ -2,6 +2,7 @@ import { ApiError, apiFetch, openProgressStream } from '@daastaan/api-types'
 import type { ProgressEvent } from '@daastaan/api-types'
 import { needsRefresh } from './live'
 import type {
+  CliffhangerAnalysis,
   DispatchAccepted,
   ConsistencyCheck,
   ExportFormat,
@@ -13,11 +14,13 @@ import type {
   ShareInfo,
   Story,
   StoryDetail,
+  StoryGenomeAnalysis,
   User,
   Version,
   VideoEdit,
   VideoEditManifest,
   VideoEditorBootstrap,
+  WritersRoomSession,
 } from './types'
 
 export { ApiError }
@@ -94,6 +97,19 @@ export const stories = {
       method: 'POST',
       body: JSON.stringify(body),
     }),
+  // --- Post-production analysis features ---
+  writersRoom: (id: string) =>
+    apiFetch<WritersRoomSession[]>(`/stories/${id}/writers-room`),
+  startWritersRoom: (id: string) =>
+    apiFetch<WritersRoomSession>(`/stories/${id}/writers-room`, { method: 'POST' }),
+  cliffhanger: (id: string) =>
+    apiFetch<CliffhangerAnalysis[]>(`/stories/${id}/cliffhanger`),
+  startCliffhanger: (id: string) =>
+    apiFetch<CliffhangerAnalysis>(`/stories/${id}/cliffhanger`, { method: 'POST' }),
+  genome: (id: string) =>
+    apiFetch<StoryGenomeAnalysis[]>(`/stories/${id}/genome`),
+  startGenome: (id: string) =>
+    apiFetch<StoryGenomeAnalysis>(`/stories/${id}/genome`, { method: 'POST' }),
 }
 
 export const editor = {
