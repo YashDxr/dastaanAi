@@ -6,6 +6,7 @@ import { FeedbackComposer } from '../components/FeedbackComposer'
 import { ProgressStepper } from '../components/ProgressStepper'
 import { ScenePanel } from '../components/ScenePanel'
 import { ScriptPanel } from '../components/ScriptPanel'
+import { CharacterAvatar } from '../components/CharacterAvatar'
 import { formatError, stories as storiesApi, watchProgress } from '../api'
 import { applyEvent, emptyLive } from '../live'
 import type { FeedbackEntry, Progress, StoryDetail, User } from '../types'
@@ -276,10 +277,13 @@ export function Studio({ user, storyId, onLogout, onHome, onCompose }: Props) {
                   <p className="eyebrow">Cast</p>
                   <ul>
                     {(state?.characters ?? []).map((c) => (
-                      <li key={c.id}>
-                        <strong>{c.name}</strong>
-                        <span className="muted">{c.role.replaceAll('_', ' ')}</span>
-                        <p>{c.personality}</p>
+                      <li key={c.id} className="cast-item">
+                        <CharacterAvatar name={c.name} role={c.role} size="md" />
+                        <div>
+                          <strong>{c.name}</strong>
+                          <span className="muted">{c.role.replaceAll('_', ' ')}</span>
+                          <p>{c.personality}</p>
+                        </div>
                       </li>
                     ))}
                     {!state?.characters?.length && <li className="muted">Casting in progress…</li>}

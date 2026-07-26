@@ -1316,10 +1316,14 @@
 
 .line-meta {
   display: flex;
-  justify-content: space-between;
-  gap: 0.75rem;
+  align-items: center;
+  gap: 0.5rem;
   margin-bottom: 0.25rem;
   font-size: 0.8rem;
+}
+
+.line-meta .emotion {
+  margin-left: auto;
 }
 
 .speaker {
@@ -1352,6 +1356,12 @@
   display: flex;
   flex-direction: column;
   gap: 0.9rem;
+}
+
+.cast-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.7rem;
 }
 
 .cast-panel li strong {

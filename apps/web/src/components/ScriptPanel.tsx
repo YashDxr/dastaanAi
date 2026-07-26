@@ -1,3 +1,5 @@
+import { useMemo } from 'react'
+import { CharacterAvatar } from './CharacterAvatar'
 import type { Character, DialogueLine, Scene } from '../types'
 
 type Props = {
@@ -9,6 +11,15 @@ type Props = {
 }
 
 export function ScriptPanel({ lines, characters, scenes, onRegenerateLine, busy }: Props) {
+  const charByIdOrName = useMemo(() => {
+    const map = new Map<string, Character>()
+    for (const c of characters) {
+      map.set(c.id, c)
+      map.set(c.name, c)
+    }
+    return map
+  }, [characters])
+
   if (!lines.length) {
     return (
       <section className="script-panel">
@@ -27,30 +38,34 @@ export function ScriptPanel({ lines, characters, scenes, onRegenerateLine, busy 
         </div>
       </div>
       <div className="script-scroll">
-        {lines.map((line) => (
-          <article key={line.id} className={`script-line ${line.line_type}`}>
-            <div className="line-meta">
-              <span className="speaker">{line.speaker}</span>
-              {line.emotion && (
-                <span className="emotion">
-                  {line.emotion}
-                  {line.intensity ? ` · ${line.intensity}/5` : ''}
-                </span>
+        {lines.map((line) => {
+          const char = charByIdOrName.get(line.character_id ?? '') ?? charByIdOrName.get(line.speaker)
+          return (
+            <article key={line.id} className={`script-line ${line.line_type}`}>
+              <div className="line-meta">
+                {char && <CharacterAvatar name={char.name} role={char.role} size="sm" />}
+                <span className="speaker">{line.speaker}</span>
+                {line.emotion && (
+                  <span className="emotion">
+                    {line.emotion}
+                    {line.intensity ? ` · ${line.intensity}/5` : ''}
+                  </span>
+                )}
+              </div>
+              <p className="line-text">{line.text}</p>
+              {onRegenerateLine && (
+                <button
+                  type="button"
+                  className="line-action"
+                  disabled={busy}
+                  onClick={() => onRegenerateLine(line.id)}
+                >
+                  Respeak line
+                </button>
               )}
-            </div>
-            <p className="line-text">{line.text}</p>
-            {onRegenerateLine && (
-              <button
-                type="button"
-                className="line-action"
-                disabled={busy}
-                onClick={() => onRegenerateLine(line.id)}
-              >
-                Respeak line
-              </button>
-            )}
-          </article>
-        ))}
+            </article>
+          )
+        })}
       </div>
     </section>
   )
