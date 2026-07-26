@@ -16,10 +16,11 @@ const ACCEPT = '.pdf,.docx,.txt,.md,.png,.jpg,.jpeg,.webp,.tif,.tiff'
 
 type Props = {
   disabled?: boolean
+  language?: string
   onExtracted: (result: Ingest) => void
 }
 
-export function UploadDropzone({ disabled, onExtracted }: Props) {
+export function UploadDropzone({ disabled, language, onExtracted }: Props) {
   const [job, setJob] = useState<Ingest | null>(null)
   const [uploading, setUploading] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -78,7 +79,7 @@ export function UploadDropzone({ disabled, onExtracted }: Props) {
       setJob(null)
       setUploading(true)
       ingestApi
-        .upload(file)
+        .upload(file, language)
         .then((res) => {
           if (cancelled.current) return
           setJob({
@@ -103,7 +104,7 @@ export function UploadDropzone({ disabled, onExtracted }: Props) {
           if (!cancelled.current) setUploading(false)
         })
     },
-    [poll],
+    [poll, language],
   )
 
   const reset = () => {

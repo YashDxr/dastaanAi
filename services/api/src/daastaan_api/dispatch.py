@@ -63,10 +63,10 @@ def dispatch_regeneration(
     return task.id
 
 
-def dispatch_ingest(*, ingest_id: str, user_id: str) -> str:
+def dispatch_ingest(*, ingest_id: str, user_id: str, language: str | None = None) -> str:
     task = celery_app.send_task(
         TaskName.INGEST_EXTRACT.value,
-        kwargs={"ingest_id": ingest_id, "user_id": user_id},
+        kwargs={"ingest_id": ingest_id, "user_id": user_id, "language": language},
         queue=Queue.AGENTS.value,
         headers=_task_headers(),
     )

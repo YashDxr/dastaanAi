@@ -11,7 +11,7 @@ import structlog
 from daastaan_common import get_store, ids
 from daastaan_common.models import IngestJob
 from daastaan_contracts import IngestStatus, limits
-from fastapi import APIRouter, File, HTTPException, UploadFile, status
+from fastapi import APIRouter, File, Form, HTTPException, UploadFile, status
 
 from ..deps import CurrentUser, SessionDep
 from ..dispatch import dispatch_ingest
@@ -74,6 +74,7 @@ def _out(job: IngestJob) -> IngestOut:
         id=job.id,
         filename=job.filename,
         status=job.status,
+        language=job.language,
         method=job.method,
         page_count=job.page_count,
         raw_chars=job.raw_chars,
@@ -90,6 +91,7 @@ async def upload(
     session: SessionDep,
     user: CurrentUser,
     file: UploadFile = File(...),
+    language: str | None = Form(None),
 ) -> IngestAccepted:
     filename = (file.filename or "upload").strip()[:200]
     extension = _extension(filename)
@@ -131,6 +133,7 @@ async def upload(
         content_type=file.content_type or "application/octet-stream",
         size_bytes=len(data),
         object_key=object_key,
+        language=language,
         status=IngestStatus.PENDING,
     )
     session.add(job)
@@ -139,7 +142,7 @@ async def upload(
     session.commit()
     session.refresh(job)
 
-    dispatch_ingest(ingest_id=job.id, user_id=user.id)
+    dispatch_ingest(ingest_id=job.id, user_id=user.id, language=language)
     return IngestAccepted(ingest_id=job.id, filename=job.filename)
 
 

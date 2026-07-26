@@ -299,6 +299,7 @@ class IngestJob(SQLModel, table=True):
     content_type: str
     size_bytes: int
     object_key: str
+    language: str | None = None
     status: str = Field(default="pending", index=True)
     method: str | None = None
     page_count: int | None = None

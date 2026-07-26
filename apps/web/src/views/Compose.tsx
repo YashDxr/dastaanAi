@@ -108,7 +108,7 @@ export function Compose({ user, onLogout, onHome, onCreated }: Props) {
               .finally(() => setPending(false))
           }}
         >
-          <UploadDropzone disabled={pending} onExtracted={onExtracted} />
+          <UploadDropzone disabled={pending} language={language} onExtracted={onExtracted} />
 
           <div className="compose-divider">
             <span>or write it yourself</span>

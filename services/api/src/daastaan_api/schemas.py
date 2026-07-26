@@ -64,6 +64,7 @@ class IngestOut(BaseModel):
     id: str
     filename: str
     status: str
+    language: str | None = None
     method: str | None
     page_count: int | None
     raw_chars: int | None

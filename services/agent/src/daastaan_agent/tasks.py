@@ -1966,7 +1966,7 @@ def _gather_edit_inputs(
 
 
 @celery_app.task(name=TaskName.INGEST_EXTRACT.value, bind=True, **INGEST_RETRY_KWARGS)
-def ingest_extract(self, ingest_id: str, user_id: str) -> str:
+def ingest_extract(self, ingest_id: str, user_id: str, language: str | None = None) -> str:
     """Uploaded file -> reviewable story text.
 
     Runs on the agents pool. OCR is CPU-bound and that pool has four slots, so a
@@ -1985,7 +1985,7 @@ def ingest_extract(self, ingest_id: str, user_id: str) -> str:
         session.commit()
 
     try:
-        extraction = extractor.extract(get_store().get(object_key), content_type)
+        extraction = extractor.extract(get_store().get(object_key), content_type, language=language or "en")
 
         with session_scope() as session:
             job = session.get(IngestJob, ingest_id)

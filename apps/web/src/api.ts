@@ -151,9 +151,10 @@ export const share = {
 }
 
 export const ingest = {
-  upload: (file: File) => {
+  upload: (file: File, language?: string) => {
     const body = new FormData()
     body.append('file', file)
+    if (language) body.append('language', language)
     return apiFetch<{ ingest_id: string; filename: string }>('/ingest', { method: 'POST', body })
   },
   get: (id: string) => apiFetch<Ingest>(`/ingest/${id}`),
