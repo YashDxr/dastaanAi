@@ -146,6 +146,8 @@ class AssetKind(StrEnum):
     # An audio track the user uploaded to lay under a cut. Never generated, so it
     # is not carried over on a regeneration the way produced assets are.
     LOCAL_AUDIO = "local_audio"
+    # AI-generated character portrait, one per character per version.
+    CHARACTER_AVATAR = "character_avatar"
 
 
 class IngestStatus(StrEnum):

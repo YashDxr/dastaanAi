@@ -2,6 +2,7 @@ type Props = {
   name: string
   role: string
   size?: 'sm' | 'md'
+  imageUrl?: string | null
 }
 
 const ROLE_COLORS: Record<string, { bg: string; fg: string }> = {
@@ -21,17 +22,71 @@ const ROLE_ICONS: Record<string, string> = {
 const SIZES = { sm: 28, md: 40 } as const
 
 /**
- * A colored circle showing the first grapheme of a character's name.
- * Works across all scripts (Latin, Devanagari, Tamil, Arabic, etc.)
- * because it uses `Intl.Segmenter` where available, falling back to
- * the first code-point otherwise.
+ * Character portrait. Shows the AI-generated image when available, falling
+ * back to a colored circle with the first grapheme of the character's name.
  */
-export function CharacterAvatar({ name, role, size = 'md' }: Props) {
+export function CharacterAvatar({ name, role, size = 'md', imageUrl }: Props) {
   const px = SIZES[size]
   const colors = ROLE_COLORS[role] ?? ROLE_COLORS.supporting
+  const badgeSize = size === 'sm' ? 12 : 16
+
+  const badge = (
+    <span
+      className="char-avatar-badge"
+      style={{
+        position: 'absolute',
+        bottom: -2,
+        right: -2,
+        width: badgeSize,
+        height: badgeSize,
+        borderRadius: '50%',
+        background: colors.fg,
+        color: '#fff',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        fontSize: size === 'sm' ? '0.45rem' : '0.55rem',
+        lineHeight: 1,
+        border: '1.5px solid #fff',
+      }}
+    >
+      {ROLE_ICONS[role] ?? ROLE_ICONS.supporting}
+    </span>
+  )
+
+  if (imageUrl) {
+    return (
+      <span
+        className="char-avatar"
+        aria-label={`${name}, ${role.replaceAll('_', ' ')}`}
+        style={{
+          width: px,
+          height: px,
+          minWidth: px,
+          borderRadius: '50%',
+          display: 'inline-flex',
+          position: 'relative',
+          userSelect: 'none',
+          overflow: 'hidden',
+        }}
+      >
+        <img
+          src={imageUrl}
+          alt={name}
+          style={{
+            width: '100%',
+            height: '100%',
+            objectFit: 'cover',
+            borderRadius: '50%',
+          }}
+        />
+        {badge}
+      </span>
+    )
+  }
+
   const initial = firstGrapheme(name)
   const fontSize = size === 'sm' ? '0.78rem' : '1.05rem'
-  const badgeSize = size === 'sm' ? 12 : 16
 
   return (
     <span
@@ -55,27 +110,7 @@ export function CharacterAvatar({ name, role, size = 'md' }: Props) {
       }}
     >
       {initial}
-      <span
-        className="char-avatar-badge"
-        style={{
-          position: 'absolute',
-          bottom: -2,
-          right: -2,
-          width: badgeSize,
-          height: badgeSize,
-          borderRadius: '50%',
-          background: colors.fg,
-          color: '#fff',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          fontSize: size === 'sm' ? '0.45rem' : '0.55rem',
-          lineHeight: 1,
-          border: '1.5px solid #fff',
-        }}
-      >
-        {ROLE_ICONS[role] ?? ROLE_ICONS.supporting}
-      </span>
+      {badge}
     </span>
   )
 }

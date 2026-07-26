@@ -502,6 +502,70 @@ def gen_image(self, version_id: str, scene_id: str, user_id: str, shot_type: str
     return scene_id
 
 
+@celery_app.task(name=TaskName.GEN_AVATAR.value, bind=True, **RETRY_KWARGS)
+def gen_avatar(self, version_id: str, character_id: str, user_id: str) -> str | None:  # type: ignore[no-untyped-def]
+    """Generate a DALL-E portrait for one character."""
+    init_tracing()
+    dedupe = ids.dedupe_key(AssetKind.CHARACTER_AVATAR, line_id=character_id)
+
+    with session_scope() as session:
+        if repo.find_asset(session, version_id=version_id, dedupe_key=dedupe):
+            return character_id
+
+        claim = repo.claim_asset(
+            session, version_id=version_id, kind=AssetKind.CHARACTER_AVATAR, dedupe_key=dedupe
+        )
+        if claim is None:
+            return character_id
+
+        state = repo.load_state(session, version_id)
+        character = next((c for c in state.characters if c.id == character_id), None)
+        if character is None:
+            repo.release_claim(session, claim)
+            raise LookupError(f"character {character_id} not in version {version_id}")
+
+        mood = state.mood.mood if state.mood else "neutral"
+        prompt = prompts.character_avatar_prompt(character, mood)
+
+        try:
+            gateway = ModelGateway(
+                session,
+                stage=StageName.IMAGE_GENERATION.value,
+                version_id=version_id,
+                user_id=user_id,
+                story_id=state.story_id,
+                bypass_cache=_bypass_cache(state),
+            )
+            image = gateway.image(prompt=prompt, size="1024x1024")
+        except (BadRequestError, OpenAIError) as exc:
+            error_body = str(exc)
+            is_moderation = "moderation" in error_body or "safety" in error_body
+            if is_moderation:
+                repo.release_claim(session, claim)
+                log.warning("avatar_moderation_blocked", character_id=character_id, error=error_body[:300])
+                return character_id
+            repo.release_claim(session, claim)
+            raise
+        except Exception:
+            repo.release_claim(session, claim)
+            raise
+
+        key = ids.object_key(version_id, AssetKind.CHARACTER_AVATAR, line_id=character_id, ext="png")
+        get_store().put(key, image, "image/png")
+        repo.record_asset(
+            session,
+            version_id=version_id,
+            kind=AssetKind.CHARACTER_AVATAR,
+            dedupe_key=dedupe,
+            object_key=key,
+            content_type="image/png",
+            line_id=character_id,
+            size_bytes=len(image),
+        )
+        repo.publish(state.story_id, AssetEvent(kind=AssetKind.CHARACTER_AVATAR, scene_id=character_id))
+    return character_id
+
+
 @celery_app.task(name=TaskName.GEN_MUSIC.value, bind=True)
 def gen_music(self, version_id: str, user_id: str) -> str | None:  # type: ignore[no-untyped-def]
     """Generate one loopable instrumental bed through the private Mac sidecar.
@@ -890,6 +954,15 @@ def fan_out(
             image_tasks = []
             image_total = 0
 
+        # Character avatar portraits — one per character, alongside other media.
+        # Not counted in image_total: they don't report against IMAGE_GENERATION
+        # progress and should not inflate the stepper denominator.
+        avatar_tasks = [
+            gen_avatar.si(version_id, char.id, user_id)
+            for char in state.characters
+            if ids.dedupe_key(AssetKind.CHARACTER_AVATAR, line_id=char.id) not in existing
+        ]
+
         # Opened here, closed by `assemble`: neither stage has a task of its own
         # to report against, and without these rows the stepper can never pass 80%.
         repo.start_job(
@@ -933,7 +1006,7 @@ def fan_out(
                 error="Background score is disabled.",
             )
 
-    jobs = [*line_tasks, *image_tasks]
+    jobs = [*line_tasks, *image_tasks, *avatar_tasks]
     # A committed empty slot is a recoverable interrupted generation, not an
     # asset. Re-submit it under the same sidecar idempotency key so it resumes
     # safely instead of producing a permanent narration-only version.

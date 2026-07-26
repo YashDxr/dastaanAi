@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { AppHeader } from '../components/AppHeader'
 import { AlternateEndings } from '../components/AlternateEndings'
 import { AudioPlayer } from '../components/AudioPlayer'
@@ -167,6 +167,14 @@ export function Studio({ user, storyId, tab, onTab, onLogout, onHome, onCompose 
   const wantsVideo =
     state?.output_format === 'video' || state?.output_format === 'both'
   const scenes = state?.scenes ?? []
+  // Character avatar portraits keyed by character_id (stored in asset.line_id).
+  const avatarUrls = useMemo(() => {
+    const map = new Map<string, string>()
+    for (const a of detail?.assets ?? []) {
+      if (a.kind === 'character_avatar' && a.line_id) map.set(a.line_id, a.url)
+    }
+    return map
+  }, [detail?.assets])
   const hasMusicBed = playerAssets.some((a) => a.kind === 'music_bed')
     || stickyAssets.some((a) => a.kind === 'music_bed')
   // The editor cuts scene artwork against the recorded lines, so it is only worth
@@ -294,6 +302,7 @@ export function Studio({ user, storyId, tab, onTab, onLogout, onHome, onCompose 
                 [
                   ['episode', 'Episode'],
                   ['scenes', 'Scenes'],
+                  ['revisions', 'Revisions'],
                   ['editor', 'Editor'],
                   ['writers-room', 'Writers Room'],
                   ['cliffhanger', 'Cliffhanger'],
@@ -367,36 +376,8 @@ export function Studio({ user, storyId, tab, onTab, onLogout, onHome, onCompose 
                   activeLineId={activeLineId}
                   onRegenerateLine={respeakLine}
                   onSeekLine={setSeekLineId}
+                  avatarUrls={avatarUrls}
                 />
-                <StoryTimeMachine
-                  scenes={timelineState?.scenes ?? []}
-                  lines={timelineState?.lines ?? []}
-                  versions={versions}
-                  currentVersionId={detail.version?.id}
-                  baseVersionId={baseVersionId}
-                  loadingVersion={loadingBaseVersion}
-                  disabled={busy || regenerating || detail.story.status !== 'ready' || !detail.version}
-                  onSelectBaseVersion={selectBaseVersion}
-                  onCreateBranch={branchFromScene}
-                />
-                {detail.story.status === 'ready' && (
-                  <AlternateEndings
-                    storyId={storyId}
-                    state={state}
-                    disabled={busy || regenerating}
-                    onRequested={refresh}
-                  />
-                )}
-                {detail.story.status === 'ready' &&
-                  state &&
-                  state.scenes.length > 0 &&
-                  state.lines.length > 0 && (
-                    <ConsistencyPanel
-                      storyId={storyId}
-                      state={state}
-                      disabled={busy || regenerating}
-                    />
-                  )}
                 <FeedbackComposer
                   disabled={busy || regenerating}
                   interpreting={interpreting}
@@ -415,7 +396,7 @@ export function Studio({ user, storyId, tab, onTab, onLogout, onHome, onCompose 
                   <ul>
                     {(state?.characters ?? []).map((c) => (
                       <li key={c.id} className="cast-item">
-                        <CharacterAvatar name={c.name} role={c.role} size="md" />
+                        <CharacterAvatar name={c.name} role={c.role} size="md" imageUrl={avatarUrls.get(c.id)} />
                         <div>
                           <strong>{c.name}</strong>
                           <span className="muted">{c.role.replaceAll('_', ' ')}</span>
@@ -454,6 +435,45 @@ export function Studio({ user, storyId, tab, onTab, onLogout, onHome, onCompose 
                   onTab('episode')
                 }}
               />
+            </div>
+
+            <div
+              id="studio-panel-revisions"
+              role="tabpanel"
+              aria-labelledby="studio-tab-revisions"
+              hidden={tab !== 'revisions'}
+            >
+              <div className="revisions-panel">
+                <StoryTimeMachine
+                  scenes={timelineState?.scenes ?? []}
+                  lines={timelineState?.lines ?? []}
+                  versions={versions}
+                  currentVersionId={detail.version?.id}
+                  baseVersionId={baseVersionId}
+                  loadingVersion={loadingBaseVersion}
+                  disabled={busy || regenerating || detail.story.status !== 'ready' || !detail.version}
+                  onSelectBaseVersion={selectBaseVersion}
+                  onCreateBranch={branchFromScene}
+                />
+                {detail.story.status === 'ready' && (
+                  <AlternateEndings
+                    storyId={storyId}
+                    state={state}
+                    disabled={busy || regenerating}
+                    onRequested={refresh}
+                  />
+                )}
+                {detail.story.status === 'ready' &&
+                  state &&
+                  state.scenes.length > 0 &&
+                  state.lines.length > 0 && (
+                    <ConsistencyPanel
+                      storyId={storyId}
+                      state={state}
+                      disabled={busy || regenerating}
+                    />
+                  )}
+              </div>
             </div>
 
             <div

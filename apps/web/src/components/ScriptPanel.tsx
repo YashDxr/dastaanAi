@@ -10,6 +10,7 @@ type Props = {
   onSeekLine?: (lineId: string) => void
   activeLineId?: string | null
   busy?: boolean
+  avatarUrls?: Map<string, string>
 }
 
 export function ScriptPanel({
@@ -20,6 +21,7 @@ export function ScriptPanel({
   onSeekLine,
   activeLineId,
   busy,
+  avatarUrls,
 }: Props) {
   const charByIdOrName = useMemo(() => {
     const map = new Map<string, Character>()
@@ -102,7 +104,7 @@ export function ScriptPanel({
               style={onSeekLine ? { cursor: 'pointer' } : undefined}
             >
               <div className="line-meta">
-                {char && <CharacterAvatar name={char.name} role={char.role} size="sm" />}
+                {char && <CharacterAvatar name={char.name} role={char.role} size="sm" imageUrl={avatarUrls?.get(char.id)} />}
                 <span className="speaker">{line.speaker}</span>
                 {line.emotion && (
                   <span className="emotion">

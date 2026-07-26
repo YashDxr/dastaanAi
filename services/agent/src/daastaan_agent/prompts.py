@@ -271,3 +271,21 @@ SHOT_PROMPTS: dict[str, str] = {
         "conveys the emotion.\n" + _STYLE_SUFFIX
     ),
 }
+
+
+def character_avatar_prompt(character, mood: str) -> str:
+    """Build a DALL-E prompt for a character portrait avatar."""
+    role_desc = {
+        "narrator": "an omniscient storyteller",
+        "protagonist": "the main character, a hero",
+        "antagonist": "a formidable antagonist",
+        "supporting": "a memorable supporting character",
+    }.get(character.role, "a story character")
+    return (
+        f"Portrait of {character.name}, {role_desc}. "
+        f"Personality: {character.personality}. "
+        f"Overall mood: {mood}. "
+        "Painterly digital portrait, head and shoulders, soft studio lighting, "
+        "vivid but not garish colors, clean background with subtle gradient, "
+        "expressive eyes. No text, no watermarks, no frames."
+    )

@@ -229,7 +229,7 @@ export type StoryState = {
 /** Panels of the studio. `editor` is the video editor, which is deliberately a
  *  sibling of the generation view rather than part of it: nothing in it runs the
  *  pipeline, and it should not be on screen while one is still finishing. */
-export type StudioTab = 'episode' | 'scenes' | 'editor'
+export type StudioTab = 'episode' | 'scenes' | 'editor' | 'revisions' | 'writers-room' | 'cliffhanger' | 'genome'
 
 export type View =
   | { name: 'landing' }

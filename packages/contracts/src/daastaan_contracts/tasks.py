@@ -22,6 +22,7 @@ class TaskName(StrEnum):
     RUN_STAGE = "daastaan.stage.run"
     TTS_LINE = "daastaan.media.tts_line"
     GEN_IMAGE = "daastaan.media.gen_image"
+    GEN_AVATAR = "daastaan.media.gen_avatar"
     GEN_MUSIC = "daastaan.music.generate"
     ASSEMBLE = "daastaan.assembly.compose"
     INTERPRET_FEEDBACK = "daastaan.feedback.interpret"

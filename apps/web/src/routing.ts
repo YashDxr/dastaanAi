@@ -14,7 +14,7 @@
 
 import type { StudioTab, View } from './types'
 
-const STUDIO_TABS: readonly StudioTab[] = ['episode', 'scenes', 'editor']
+const STUDIO_TABS: readonly StudioTab[] = ['episode', 'scenes', 'editor', 'revisions', 'writers-room', 'cliffhanger', 'genome']
 
 /** Ids are hex UUIDs and share tokens are urlsafe base64. Anything else is
  *  someone else's fragment, and is left alone rather than guessed at. */
