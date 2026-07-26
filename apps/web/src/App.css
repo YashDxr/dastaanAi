@@ -501,11 +501,13 @@
   min-width: 0;
 }
 
-.story-row-right {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  flex: none;
+.story-row-wrap {
+  position: relative;
+}
+
+/* Room for the star, which is overlaid rather than nested inside the row. */
+.story-row-wrap .story-row {
+  padding-right: 3rem;
 }
 
 .status-dot {
@@ -538,6 +540,10 @@
 }
 
 .story-favorite {
+  position: absolute;
+  right: 1.1rem;
+  top: 50%;
+  transform: translateY(-50%);
   border: 0;
   background: none;
   padding: 0.25rem;
@@ -551,7 +557,7 @@
 
 .story-favorite:hover {
   opacity: 0.8;
-  transform: scale(1.15);
+  transform: translateY(-50%) scale(1.15);
 }
 
 .story-favorite.active {

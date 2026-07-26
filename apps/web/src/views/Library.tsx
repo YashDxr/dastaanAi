@@ -90,8 +90,7 @@ export function Library({ user, stories, onLogout, onCompose, onOpen }: Props) {
   const [sort, setSort] = useState<SortKey>('newest')
   const [favorites, setFavorites] = useState<Set<string>>(loadFavorites)
 
-  const toggleFavorite = useCallback((e: React.MouseEvent, storyId: string) => {
-    e.stopPropagation()
+  const toggleFavorite = useCallback((storyId: string) => {
     setFavorites(prev => {
       const next = new Set(prev)
       if (next.has(storyId)) next.delete(storyId)
@@ -213,7 +212,13 @@ export function Library({ user, stories, onLogout, onCompose, onOpen }: Props) {
           ) : (
             <ul>
               {filtered.map((story, index) => (
-                <li key={story.id} style={{ animationDelay: `${index * 40}ms` }}>
+                <li
+                  key={story.id}
+                  className="story-row-wrap"
+                  style={{ animationDelay: `${index * 40}ms` }}
+                >
+                  {/* The star sits beside the row rather than inside it: a button
+                      nested in a button is invalid, and the browser splits it. */}
                   <button type="button" className="story-row" onClick={() => onOpen(story.id)}>
                     <div className="story-row-left">
                       <span className={statusDotClass(story.status)} aria-hidden="true" />
@@ -225,16 +230,17 @@ export function Library({ user, stories, onLogout, onCompose, onOpen }: Props) {
                         </span>
                       </div>
                     </div>
-                    <div className="story-row-right">
-                      <button
-                        type="button"
-                        className={`story-favorite${favorites.has(story.id) ? ' active' : ''}`}
-                        onClick={e => toggleFavorite(e, story.id)}
-                        aria-label={favorites.has(story.id) ? 'Remove from favorites' : 'Add to favorites'}
-                      >
-                        {favorites.has(story.id) ? '\u2605' : '\u2606'}
-                      </button>
-                    </div>
+                  </button>
+                  <button
+                    type="button"
+                    className={`story-favorite${favorites.has(story.id) ? ' active' : ''}`}
+                    onClick={() => toggleFavorite(story.id)}
+                    aria-pressed={favorites.has(story.id)}
+                    aria-label={
+                      favorites.has(story.id) ? 'Remove from favorites' : 'Add to favorites'
+                    }
+                  >
+                    {favorites.has(story.id) ? '\u2605' : '\u2606'}
                   </button>
                 </li>
               ))}
