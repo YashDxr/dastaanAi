@@ -12,11 +12,16 @@ type Props = {
   onRegenerated: () => void
 }
 
-/** Map a scope to the pipeline stage the regeneration enters at. */
+/** Map a scope to the pipeline stage the regeneration enters at.
+ *
+ *  Each entry has to be listed under its scope in `SCOPE_ENTRY_POINTS`
+ *  (packages/contracts stages.py) or the backend rejects the dispatch. Notably
+ *  a scene cannot re-enter at `emotion_tagging`: it rewrites from
+ *  `story_understanding`, same as branching from a scene in the Time Machine. */
 const SCOPE_STAGE: Record<Scope, string> = {
   line: 'tts_synthesis',
   character: 'voice_assignment',
-  scene: 'emotion_tagging',
+  scene: 'story_understanding',
   music: 'music_generation',
   full_story: 'story_understanding',
 }
@@ -41,8 +46,11 @@ function costPreview(
   if (scope === 'scene') {
     const scene = state?.scenes.find((s) => s.id === targetId)
     const count = state?.lines.filter((l) => l.scene_id === targetId).length ?? 0
-    if (scene) return `This will re-tag emotions and re-record ${count} line${count !== 1 ? 's' : ''} in "${scene.title}".`
-    return 'This will re-process this scene.'
+    // A scene re-enters at story_understanding, so the whole downstream slice
+    // runs: script, artwork and score are all rebuilt, not just the audio.
+    if (scene)
+      return `This will rewrite "${scene.title}" and rebuild the script, artwork and score around its ${count} line${count !== 1 ? 's' : ''}.`
+    return 'This will rewrite this scene and rebuild everything downstream of it.'
   }
   if (scope === 'music') return 'This will regenerate the background score.'
   return 'This will rewrite and re-record the whole episode.'
@@ -79,7 +87,8 @@ function buildInstruction(
   else if (sliders.pace > 0) parts.push('a slightly faster pace')
 
   if (parts.length === 0) {
-    const target = scope === 'line' ? 'this line' : scope === 'character' ? "this character's lines" : 'this scene'
+    if (scope === 'scene') return 'Rework this scene with clearer emotional intent.'
+    const target = scope === 'line' ? 'this line' : "this character's lines"
     return `Re-deliver ${target} with clearer emotional intent.`
   }
 
@@ -87,7 +96,9 @@ function buildInstruction(
     ? 'Deliver this line with'
     : scope === 'character'
       ? "Deliver this character's lines with"
-      : 'Deliver this scene with'
+      // A scene re-enters at story_understanding, so this is a rewrite rather
+      // than a re-read of the existing lines.
+      : 'Rework this scene with'
 
   return `${prefix} ${parts.join(' and ')}.`
 }
